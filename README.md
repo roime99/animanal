@@ -47,20 +47,33 @@ npx expo start --web
 - **Web:** opens in the browser (often port 8081 or 8086 depending on Expo).
 - **Phone:** `npx expo start`, scan QR; use `EXPO_PUBLIC_API_FOLLOW_METRO=1` so the app follows the same LAN IP as Metro.
 
-## "Website on GitHub" - what to expect
+## Live site (GitHub Pages)
 
-- **GitHub Pages** only hosts **static** files. This project needs a **running Python API** for `/api/game/start`, WebSockets for 1v1, etc.
-- Practical deploy:
-  1. Host the **backend** on Railway, Render, Fly.io, or any VPS (run `uvicorn` as above).
-  2. Build the **Expo web** bundle and host it on **GitHub Pages**, **Netlify**, or **Vercel**, with `EXPO_PUBLIC_API_URL` (or build-time env) pointing at your public API URL.
+The game is served at **[https://roime99.github.io/animanal/](https://roime99.github.io/animanal/)** as static `index.html` (Expo web export), not the README.
 
-Example production web build (from `mobile/`):
+### One-time GitHub setup
+
+1. **Repo → Settings → Pages → Build and deployment**
+   - **Source:** GitHub **Actions** (not “Deploy from a branch” with README).
+2. **Repo → Settings → Secrets and variables → Actions → New repository secret**
+   - Name: `EXPO_PUBLIC_API_URL`
+   - Value: your **public** API base URL, e.g. `https://your-service.onrender.com` (no trailing slash). The workflow bakes this into the web build so the browser can reach FastAPI (GitHub Pages does not run Python).
+3. Push to **`main`** (or run workflow **Deploy GitHub Pages** manually). After the workflow finishes, refresh the Pages URL.
+
+The workflow adds **`.nojekyll`** so GitHub does not strip Expo’s `_expo/` folder, and **`404.html`** as a copy of **`index.html`** for SPA routing.
+
+### Backend
+
+Host `backend/` on Render, Railway, Fly.io, etc. (`uvicorn main:app --host 0.0.0.0 --port $PORT`). Use the same origin you put in `EXPO_PUBLIC_API_URL`. Redeploy **or** re-run the Pages workflow after changing the API URL.
+
+### Local static build (optional)
 
 ```powershell
-npx expo export --platform web
+cd mobile
+$env:EXPO_PUBLIC_API_URL="https://your-api.example.com"
+npm run export:web
+# output: mobile/dist/index.html
 ```
-
-Upload the generated static output to your static host; set the API URL to your deployed FastAPI origin.
 
 ## Naming
 

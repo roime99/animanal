@@ -1,0 +1,62 @@
+# Build Expo web static export and deploy to GitHub Pages (https://roime99.github.io/animanal/)
+name: Deploy GitHub Pages
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  pages: write
+  id-token: write
+
+concurrency:
+  group: pages
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: mobile/package-lock.json
+
+      - name: Install dependencies
+        working-directory: mobile
+        run: npm ci
+
+      - name: Export static web
+        working-directory: mobile
+        env:
+          # Required: Repo → Settings → Secrets → Actions → EXPO_PUBLIC_API_URL
+          # Example: https://your-api.onrender.com  (no trailing slash)
+          EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
+        run: npx expo export --platform web
+
+      - name: SPA fallback (GitHub Pages 404 → same as index.html)
+        run: cp mobile/dist/index.html mobile/dist/404.html
+
+      # Expo uses `_expo/`; Jekyll would ignore it unless disabled.
+      - name: Disable Jekyll
+        run: touch mobile/dist/.nojekyll
+
+      - name: Upload Pages artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: mobile/dist
+
+  deploy:
+    needs: build
+    runs-on: ubuntu-latest
+    environment:
+      name: github-pages
+      url: ${{ steps.deployment.outputs.page_url }}
+    steps:
+      - id: deployment
+        uses: actions/deploy-pages@v4

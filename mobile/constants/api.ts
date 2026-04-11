@@ -22,6 +22,10 @@ const FOLLOW_METRO = process.env.EXPO_PUBLIC_API_FOLLOW_METRO === "1";
 function defaultLoopbackBase(): string {
   if (typeof window !== "undefined" && window.location?.hostname) {
     const h = window.location.hostname;
+    // GitHub Pages has no API on :8000 — require EXPO_PUBLIC_API_URL at build time.
+    if (h.endsWith("github.io")) {
+      return ENV_API_BASE || "";
+    }
     return `http://${h}:8000`;
   }
   return "http://127.0.0.1:8000";

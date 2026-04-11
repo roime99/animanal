@@ -3,6 +3,9 @@
     "name": "Animal - Animal Trivia",
     "slug": "animal-animal-trivia-embed",
     "version": "1.0.0",
+    "experiments": {
+      "baseUrl": "/animanal/"
+    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
