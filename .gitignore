@@ -1,0 +1,25 @@
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+backend/.env
+
+# Node / Expo
+mobile/node_modules/
+mobile/.expo/
+mobile/dist/
+mobile/web-build/
+
+# Local secrets (copy from .env.example)
+mobile/.env
+
+# Never ship a local image pack in this edition (Wikimedia URLs only)
+images/
+
+# OS / IDE
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
