@@ -3,7 +3,6 @@ import type { CSSProperties } from "react";
 import {
   ActivityIndicator,
   Image,
-  ImageBackground,
   Platform,
   Pressable,
   ScrollView,
@@ -12,6 +11,8 @@ import {
   View,
 } from "react-native";
 
+import { GameCyclingBackdrop } from "../components/GameCyclingBackdrop";
+import { useGameCyclingBackground } from "../hooks/useGameCyclingBackground";
 import type { DifficultyKey, GameQuestion } from "../services/gameApi";
 import { fetchGameStart, fullImageUrl } from "../services/gameApi";
 
@@ -49,6 +50,10 @@ export function GameScreen({ difficulty, embedMode = false, onFinish, onBack }: 
   const [imageError, setImageError] = useState<string | null>(null);
   const [awaitingContinue, setAwaitingContinue] = useState(false);
   const [pendingProgress, setPendingProgress] = useState<PendingProgress>(null);
+
+  const { cycleIndex, flash, flashCorrect, flashWrong } = useGameCyclingBackground(
+    !loading && !error && !!questions[index]
+  );
 
   const q = questions[index];
   const total = questions.length;
@@ -97,12 +102,17 @@ export function GameScreen({ difficulty, embedMode = false, onFinish, onBack }: 
       setLocked(true);
       setPicked(choice);
       const correct = choice === q.correct_answer;
+      if (correct) {
+        flashCorrect();
+      } else {
+        flashWrong();
+      }
       const nextScore = score + (correct ? 1 : 0);
       const isLast = index + 1 >= total;
       setPendingProgress({ nextScore, isLast });
       setAwaitingContinue(true);
     },
-    [locked, q, score, index, total, label, onFinish]
+    [locked, q, score, index, total, flashCorrect, flashWrong]
   );
 
   const continueAfterRead = useCallback(() => {
@@ -157,18 +167,12 @@ export function GameScreen({ difficulty, embedMode = false, onFinish, onBack }: 
   }
 
   return (
-    <ImageBackground
-      source={require("../assets/game-background.png")}
-      resizeMode="cover"
-      style={styles.bg}
-      imageStyle={styles.bgImage}
-    >
-      <View style={styles.bgOverlay}>
-        <ScrollView
-          style={styles.scrollView}
-          contentContainerStyle={styles.scroll}
-          keyboardShouldPersistTaps="handled"
-        >
+    <GameCyclingBackdrop cycleIndex={cycleIndex} flash={flash} overlayStyle={styles.bgOverlay}>
+      <ScrollView
+        style={styles.scrollView}
+        contentContainerStyle={styles.scroll}
+        keyboardShouldPersistTaps="handled"
+      >
           <Text style={styles.progress}>
             Question {index + 1} / {total} · Score {score}
           </Text>
@@ -234,15 +238,12 @@ export function GameScreen({ difficulty, embedMode = false, onFinish, onBack }: 
             </View>
           )}
         </ScrollView>
-      </View>
-    </ImageBackground>
+    </GameCyclingBackdrop>
   );
 }
 
 const styles = StyleSheet.create({
-  bg: { flex: 1 },
-  bgImage: { width: "100%", height: "100%" },
-  bgOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.28)" },
+  bgOverlay: { backgroundColor: "rgba(0,0,0,0.28)" },
   scrollView: { flex: 1 },
   scroll: {
     flexGrow: 1,

@@ -1,17 +1,17 @@
 import { apiUrl } from "../constants/api";
-import { apiFetch } from "../utils/apiFetch";
+import { apiFetch, readApiJson } from "../utils/apiFetch";
 
 export type MatchRole = "host" | "guest";
 
 export async function fetchMatchCreate(): Promise<{ code: string; token: string; role: MatchRole }> {
   const res = await apiFetch(apiUrl("/api/match/create"), { method: "POST" });
-  const data = (await res.json()) as {
+  const data = await readApiJson<{
     ok?: boolean;
     code?: string;
     token?: string;
     role?: string;
     detail?: unknown;
-  };
+  }>(res);
   if (!res.ok) {
     const detail =
       typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail ?? res.statusText);
@@ -29,13 +29,13 @@ export async function fetchMatchJoin(rawCode: string): Promise<{ code: string; t
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ code: rawCode.trim() }),
   });
-  const data = (await res.json()) as {
+  const data = await readApiJson<{
     ok?: boolean;
     code?: string;
     token?: string;
     role?: string;
     detail?: unknown;
-  };
+  }>(res);
   if (!res.ok) {
     const detail =
       typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail ?? res.statusText);

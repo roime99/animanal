@@ -37,7 +37,7 @@ jobs:
           # Required: Repo → Settings → Secrets → Actions → EXPO_PUBLIC_API_URL
           # Example: https://your-api.onrender.com  (no trailing slash)
           EXPO_PUBLIC_API_URL: ${{ secrets.EXPO_PUBLIC_API_URL }}
-        run: npx expo export --platform web
+        run: npm run export:web
 
       - name: SPA fallback (GitHub Pages 404 → same as index.html)
         run: cp mobile/dist/index.html mobile/dist/404.html

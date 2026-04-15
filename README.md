@@ -13,9 +13,13 @@ Self-contained fork of the game that **only loads pictures from Wikimedia URLs**
 animal-trivia-embed/
   README.md          ← you are here
   animals.db         ← game data (commit or replace with your own)
+  bg/                ← menu + cycling background PNGs (committed)
+  fonts/             ← June Gull (or any .otf) — copied into mobile on start/export
   backend/           ← FastAPI
   mobile/            ← Expo (React Native + web)
 ```
+
+`npm start` / `npm run export:web` in `mobile/` runs **`vendor:assets`**, which copies `bg/` → `mobile/assets/bg/` and normalizes fonts to `mobile/assets/fonts/junegull-rg.otf`. Those generated paths are gitignored.
 
 ## Run locally (development)
 

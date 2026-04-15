@@ -12,6 +12,7 @@ import {
 
 import { ScalePress } from "../components/ScalePress";
 import { getApiBaseUrl } from "../constants/api";
+import { STATIC_MENU_BG } from "../constants/menuBackgroundAsset";
 import { HIERARCHY_MODE_OPTIONS } from "../constants/hierarchyModes";
 import type { MgmtLogLine, MgmtStatusResponse } from "../services/mgmtApi";
 import {
@@ -290,7 +291,7 @@ export function MgmtScreen({ devUserNorm, onBack }: Props) {
 
   return (
     <ImageBackground
-      source={require("../assets/menu-background.png")}
+      source={STATIC_MENU_BG}
       resizeMode="cover"
       style={styles.bg}
       imageStyle={styles.bgImage}

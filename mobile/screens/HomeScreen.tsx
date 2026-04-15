@@ -8,6 +8,7 @@ import {
   View,
 } from "react-native";
 
+import { STATIC_MENU_BG } from "../constants/menuBackgroundAsset";
 import { FadeSlideIn } from "../components/FadeSlideIn";
 import { ScalePress } from "../components/ScalePress";
 import type { PlayerStats } from "../services/playerStorage";
@@ -20,10 +21,13 @@ type Props = {
   onSwitchUser: () => void;
   soundMuted: boolean;
   onToggleSoundMute: () => void;
+  /** Wikimedia-only images (no local images folder); HTML embed on web. */
+  embedMode: boolean;
+  onToggleEmbedMode: () => void;
   onOpenCase?: () => void;
   onOpenInventory?: () => void;
   onOnline1v1?: () => void;
-  /** Birds, Mammals, Fish, etc. - endless filtered by hierarchy segment. */
+  /** Birds, Mammals, Fish, etc. — endless filtered by hierarchy substring. */
   onHierarchyEndless?: () => void;
   /** Dev-only: server logs, run commands, hierarchy verify (roi_boi account). */
   onOpenDevConsole?: () => void;
@@ -37,6 +41,8 @@ export function HomeScreen({
   onSwitchUser,
   soundMuted,
   onToggleSoundMute,
+  embedMode,
+  onToggleEmbedMode,
   onOpenCase,
   onOpenInventory,
   onOnline1v1,
@@ -60,25 +66,24 @@ export function HomeScreen({
 
   const baseOnline = statsPreview ? 300 : 200;
   const baseFamily = statsPreview ? 360 : 250;
-  const baseMute = statsPreview ? 420 : 280;
-  const baseStart = statsPreview ? 480 : 340;
-  const baseSwitch = statsPreview ? 540 : 400;
+  const baseMute = statsPreview ? 410 : 270;
+  const baseEmbed = statsPreview ? 465 : 325;
+  const baseStart = statsPreview ? 530 : 390;
+  const baseSwitch = statsPreview ? 590 : 450;
 
   return (
     <ImageBackground
-      source={require("../assets/menu-background.png")}
+      source={STATIC_MENU_BG}
       resizeMode="cover"
       style={styles.bg}
       imageStyle={styles.bgImage}
     >
       <View style={styles.overlay}>
         <FadeSlideIn delay={0} duration={560} fromY={28}>
-          <Text style={styles.title}>Animal - Animal Trivia</Text>
+          <Text style={styles.title}>Who's That Animal?</Text>
         </FadeSlideIn>
         <FadeSlideIn delay={80} duration={520} fromY={18}>
-          <Text style={styles.subtitle}>
-            Wikimedia pictures only (no app image pack). Enter a username - names are unique (case-insensitive).
-          </Text>
+          <Text style={styles.subtitle}>Enter a username to play. Names are unique (case-insensitive).</Text>
         </FadeSlideIn>
 
         <FadeSlideIn delay={140} duration={480} fromY={14}>
@@ -107,7 +112,7 @@ export function HomeScreen({
         {statsPreview ? (
           <FadeSlideIn key="stats" delay={220} duration={520} fromY={20} style={styles.preview}>
             <Text style={styles.previewTitle}>Saved stats</Text>
-            <Text style={styles.previewLine}>Golden coins: {statsPreview.goldenCoins ?? 0}</Text>
+            <Text style={styles.previewLine}>🪙 Golden coins: {statsPreview.goldenCoins ?? 0}</Text>
             <Text style={styles.previewLine}>Hi score: {statsPreview.endlessHiScore}</Text>
             <Text style={styles.previewLine}>Games: {statsPreview.gamesPlayed}</Text>
             <Text style={styles.previewLine}>
@@ -189,7 +194,22 @@ export function HomeScreen({
             scaleTo={0.98}
             onPress={onToggleSoundMute}
           >
-            <Text style={styles.muteText}>{soundMuted ? "Sound off" : "Sound on"}</Text>
+            <Text style={styles.muteText}>{soundMuted ? "🔇 Sound off" : "🔊 Sound on"}</Text>
+          </ScalePress>
+        </FadeSlideIn>
+
+        <FadeSlideIn delay={baseEmbed} duration={420} fromY={10}>
+          <ScalePress
+            accessibilityRole="switch"
+            accessibilityLabel={embedMode ? "Turn off embed mode" : "Turn on embed mode"}
+            accessibilityState={{ checked: embedMode }}
+            style={[styles.embedBtn, embedMode && styles.embedBtnOn]}
+            scaleTo={0.98}
+            onPress={onToggleEmbedMode}
+          >
+            <Text style={styles.embedBtnText}>
+              {embedMode ? "🖼 Embed mode on (Wikimedia)" : "🖼 Embed mode off (local images if any)"}
+            </Text>
           </ScalePress>
         </FadeSlideIn>
 
@@ -348,6 +368,22 @@ const styles = StyleSheet.create({
     borderColor: "rgba(255,255,255,0.25)",
   },
   muteText: { color: "rgba(255,248,225,0.95)", fontSize: 15, fontWeight: "700" },
+  embedBtn: {
+    marginBottom: 12,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: "rgba(0, 77, 64, 0.45)",
+    borderWidth: 1,
+    borderColor: "rgba(165, 214, 167, 0.35)",
+    maxWidth: 360,
+    alignSelf: "center",
+  },
+  embedBtnOn: {
+    backgroundColor: "rgba(0, 105, 92, 0.72)",
+    borderColor: "rgba(178, 255, 229, 0.55)",
+  },
+  embedBtnText: { color: "#e0f2f1", fontSize: 13, fontWeight: "700", textAlign: "center" },
   startBtn: {
     backgroundColor: "#ffb300",
     paddingVertical: 16,

@@ -11,6 +11,10 @@ const ROI_BOI_GOLDEN_COINS = 1_000_000;
 /** Cost in golden coins for the single available case type. */
 export const CASE_OPEN_COST = 100;
 
+/** Charged when an online 1v1 match starts (first round). Practice vs bot is free. */
+export const ONLINE_MATCH_ENTRY_COST = 50;
+export const ONLINE_MATCH_WIN_REWARD = 100;
+
 export type InventoryEntry = {
   id: number;
   animalName: string;
@@ -229,4 +233,44 @@ export async function openCaseAndRecord(
   map[norm] = next;
   await saveMap(map);
   return next;
+}
+
+export async function chargeOnlineMatchEntry(norm: string): Promise<PlayerStatsNormalized> {
+  const map = await loadMap();
+  const existing = map[norm];
+  if (!existing) {
+    throw new Error("Unknown player");
+  }
+  const base = withDefaults(existing);
+  if (base.goldenCoins < ONLINE_MATCH_ENTRY_COST) {
+    throw new Error(`Need ${ONLINE_MATCH_ENTRY_COST} golden coins to play online 1v1.`);
+  }
+  const next: PlayerStatsNormalized = {
+    ...base,
+    goldenCoins: base.goldenCoins - ONLINE_MATCH_ENTRY_COST,
+    lastPlayedAt: new Date().toISOString(),
+  };
+  map[norm] = next;
+  await saveMap(map);
+  return next;
+}
+
+/** Loser gets no refund (entry already spent). Winner receives ONLINE_MATCH_WIN_REWARD. */
+export async function applyOnlineMatchPayout(norm: string, won: boolean): Promise<PlayerStatsNormalized> {
+  if (!won) {
+    const map = await loadMap();
+    const existing = map[norm];
+    if (!existing) {
+      throw new Error("Unknown player");
+    }
+    const base = withDefaults(existing);
+    const next: PlayerStatsNormalized = {
+      ...base,
+      lastPlayedAt: new Date().toISOString(),
+    };
+    map[norm] = next;
+    await saveMap(map);
+    return next;
+  }
+  return addGoldenCoins(norm, ONLINE_MATCH_WIN_REWARD);
 }

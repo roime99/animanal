@@ -1,5 +1,5 @@
-import { apiUrl, getApiBaseUrl } from "../constants/api";
-import { apiFetch } from "../utils/apiFetch";
+import { apiUrl, assertApiBaseConfigured, getApiBaseUrl } from "../constants/api";
+import { apiFetch, readApiJson } from "../utils/apiFetch";
 import { debugLog } from "../utils/debugLog";
 
 export type DifficultyKey = "easy" | "medium" | "hard";
@@ -65,7 +65,7 @@ export async function fetchGameStart(
     excludeAnimalNames: ex.length,
   });
   const res = await apiFetch(url);
-  const data = (await res.json()) as GameStartResponse & { detail?: string | unknown };
+  const data = await readApiJson<GameStartResponse & { detail?: string | unknown }>(res);
 
   if (!res.ok) {
     const detail =
@@ -227,5 +227,5 @@ export function fullImageUrl(relativePath: string): string {
     return relativePath;
   }
   const path = encodeUrlPath(relativePath);
-  return `${getApiBaseUrl()}${path}`;
+  return `${assertApiBaseConfigured()}${path}`;
 }

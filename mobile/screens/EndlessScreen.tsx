@@ -5,7 +5,6 @@ import {
   Animated,
   Easing,
   Image,
-  ImageBackground,
   Platform,
   Pressable,
   ScrollView,
@@ -14,7 +13,9 @@ import {
   View,
 } from "react-native";
 
+import { GameCyclingBackdrop } from "../components/GameCyclingBackdrop";
 import { HIERARCHY_MODE_OPTIONS } from "../constants/hierarchyModes";
+import { useGameCyclingBackground } from "../hooks/useGameCyclingBackground";
 import { debugLog } from "../utils/debugLog";
 import type { GameQuestion, LevelNumber } from "../services/gameApi";
 import { difficultyForLevel, fetchGameStart, fullImageUrl } from "../services/gameApi";
@@ -164,6 +165,7 @@ export function EndlessScreen({
 
   const q = questions[index];
   const totalInBatch = questions.length;
+  const { cycleIndex, flash, flashCorrect, flashWrong } = useGameCyclingBackground(!loading && !error && !!q);
   const questionKey = useMemo(() => (q ? `${level}-${index}-${q.id}` : ""), [level, index, q]);
   const groupLabel = useMemo(() => {
     const trimmed = (hierarchyMode ?? "").trim();
@@ -337,6 +339,11 @@ export function EndlessScreen({
       setPicked(choice);
 
       const correct = choice === q.correct_answer;
+      if (correct) {
+        flashCorrect();
+      } else {
+        flashWrong();
+      }
       const nextScore = score + (correct ? 1 : 0);
       const isLast = index + 1 >= totalInBatch;
 
@@ -365,7 +372,7 @@ export function EndlessScreen({
       });
       setAwaitingContinue(true);
     },
-    [locked, q, score, index, totalInBatch, lives, soundMuted, onEarnCoins, showCoinRewardPopup]
+    [locked, q, score, index, totalInBatch, lives, soundMuted, onEarnCoins, showCoinRewardPopup, flashCorrect, flashWrong]
   );
 
   const continueAfterRead = useCallback(() => {
@@ -436,14 +443,8 @@ export function EndlessScreen({
   }
 
   return (
-    <ImageBackground
-      source={require("../assets/game-background.png")}
-      resizeMode="cover"
-      style={styles.bg}
-      imageStyle={styles.bgImage}
-    >
-      <View style={styles.bgOverlay}>
-        <Animated.View
+    <GameCyclingBackdrop cycleIndex={cycleIndex} flash={flash} overlayStyle={styles.bgOverlay}>
+      <Animated.View
           pointerEvents="none"
           style={[
             styles.coinPop,
@@ -578,15 +579,12 @@ export function EndlessScreen({
             </Animated.View>
           )}
         </ScrollView>
-      </View>
-    </ImageBackground>
+    </GameCyclingBackdrop>
   );
 }
 
 const styles = StyleSheet.create({
-  bg: { flex: 1 },
-  bgImage: { width: "100%", height: "100%" },
-  bgOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.28)" },
+  bgOverlay: { backgroundColor: "rgba(0,0,0,0.28)" },
   scrollView: { flex: 1 },
   scroll: {
     flexGrow: 1,

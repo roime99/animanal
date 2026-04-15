@@ -1,7 +1,9 @@
+import { useFonts } from "expo-font";
 import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
-import { SafeAreaView, StyleSheet } from "react-native";
+import { ActivityIndicator, SafeAreaView, StyleSheet, View } from "react-native";
 
+import { APP_FONT_FAMILY } from "./constants/typography";
 import { CaseOpenScreen } from "./screens/CaseOpenScreen";
 import { HierarchyGroupScreen } from "./screens/HierarchyGroupScreen";
 import { EndlessScreen } from "./screens/EndlessScreen";
@@ -21,12 +23,11 @@ import {
   ROI_BOI_NORM,
   type InventoryEntry,
   type PlayerStats,
+  type PlayerStatsNormalized,
 } from "./services/playerStorage";
 import { getSoundMuted, setSoundMuted } from "./services/settingsStorage";
+import { applyAppFont } from "./utils/applyAppFont";
 import { debugLog } from "./utils/debugLog";
-
-/** This edition always uses Wikimedia embed URLs (no local `images/` folder). */
-const EMBED_MODE = true;
 
 type Route =
   | { screen: "home" }
@@ -45,11 +46,17 @@ type Route =
   | { screen: "mgmt" };
 
 export default function App() {
+  const [fontsLoaded] = useFonts({
+    [APP_FONT_FAMILY]: require("./assets/fonts/junegull-rg.otf"),
+  });
+
   const [route, setRoute] = useState<Route>({ screen: "home" });
   const [username, setUsername] = useState("");
   const [player, setPlayer] = useState<{ norm: string; stats: PlayerStats } | null>(null);
   const [endlessSessionId, setEndlessSessionId] = useState(0);
   const [soundMuted, setSoundMutedState] = useState(false);
+  /** Wikimedia embed edition — always on for GitHub Pages. */
+  const embedMode = true;
   const returnRouteRef = useRef<Route>({ screen: "home" });
 
   useEffect(() => {
@@ -186,6 +193,16 @@ export default function App() {
     });
   }, []);
 
+  if (!fontsLoaded) {
+    return (
+      <View style={styles.fontsLoading}>
+        <ActivityIndicator size="large" color="#2e7d32" />
+      </View>
+    );
+  }
+
+  applyAppFont(APP_FONT_FAMILY);
+
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar style="dark" />
@@ -198,6 +215,8 @@ export default function App() {
           onSwitchUser={handleSwitchUser}
           soundMuted={soundMuted}
           onToggleSoundMute={toggleSoundMute}
+          embedMode={embedMode}
+          onToggleEmbedMode={() => {}}
           onOpenCase={player ? navigateToCase : undefined}
           onOpenInventory={player ? navigateToInventory : undefined}
           onOnline1v1={goOnlineMatch}
@@ -212,14 +231,22 @@ export default function App() {
         <HierarchyGroupScreen onBack={goHome} onPickMode={handleHierarchyModePicked} />
       )}
       {route.screen === "online_match" && (
-        <OnlineMatchScreen onBack={goHome} soundMuted={soundMuted} />
+        <OnlineMatchScreen
+          onBack={goHome}
+          soundMuted={soundMuted}
+          playerNorm={player?.norm ?? null}
+          goldenCoins={player?.stats.goldenCoins ?? 0}
+          onPlayerEconomyUpdate={(stats: PlayerStatsNormalized) => {
+            setPlayer((prev) => (prev ? { norm: prev.norm, stats } : prev));
+          }}
+        />
       )}
       {route.screen === "endless" && player && (
         <EndlessScreen
           key={endlessSessionId}
           goldenCoins={player.stats.goldenCoins ?? 0}
           soundMuted={soundMuted}
-          embedMode={EMBED_MODE}
+          embedMode={embedMode}
           hierarchyMode={route.hierarchyMode}
           onEarnCoins={onEarnCoins}
           onFinish={onFinishEndless}
@@ -241,7 +268,7 @@ export default function App() {
         <CaseOpenScreen
           goldenCoins={player.stats.goldenCoins ?? 0}
           soundMuted={soundMuted}
-          embedMode={EMBED_MODE}
+          embedMode={embedMode}
           onOpenCase={handleCaseOpen}
           onBack={backFromCaseOrInventory}
         />
@@ -255,4 +282,5 @@ export default function App() {
 
 const styles = StyleSheet.create({
   root: { flex: 1, backgroundColor: "#fafafa" },
+  fontsLoading: { flex: 1, justifyContent: "center", alignItems: "center", backgroundColor: "#fafafa" },
 });

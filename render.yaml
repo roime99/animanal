@@ -1,0 +1,12 @@
+# https://render.com/docs/blueprint-spec — deploy from this embed repo root.
+services:
+  - type: web
+    name: animanal-api
+    runtime: python
+    plan: free
+    buildCommand: pip install --upgrade pip && pip install -r backend/requirements.txt
+    startCommand: cd backend && uvicorn main:app --host 0.0.0.0 --port $PORT
+    healthCheckPath: /health
+    envVars:
+      - key: PYTHON_VERSION
+        value: "3.12.8"

@@ -5,7 +5,6 @@ import {
   Animated,
   Easing,
   Image,
-  ImageBackground,
   Platform,
   Pressable,
   ScrollView,
@@ -14,6 +13,8 @@ import {
   View,
 } from "react-native";
 
+import { GameCyclingBackdrop } from "../components/GameCyclingBackdrop";
+import { useGameCyclingBackground } from "../hooks/useGameCyclingBackground";
 import type { GameQuestion } from "../services/gameApi";
 import { fullImageUrl } from "../services/gameApi";
 type Props = {
@@ -138,6 +139,8 @@ export function OnlineGameScreen({
 
   const questionKey = useMemo(() => `${roundSeq}-${question.id}`, [roundSeq, question.id]);
 
+  const { cycleIndex, flash, flashCorrect, flashWrong } = useGameCyclingBackground(true);
+
   useEffect(() => {
     setPicked(null);
     setLocked(false);
@@ -214,9 +217,14 @@ export function OnlineGameScreen({
       if (locked || myWrongThisRound || !imageRevealed) return;
       setLocked(true);
       setPicked(choice);
+      if (choice === question.correct_answer) {
+        flashCorrect();
+      } else {
+        flashWrong();
+      }
       onGuess(choice);
     },
-    [locked, myWrongThisRound, imageRevealed, onGuess]
+    [locked, myWrongThisRound, imageRevealed, onGuess, question.correct_answer, flashCorrect, flashWrong]
   );
 
   const imageUri = useMemo(() => fullImageUrl(question.image_url), [question.image_url]);
@@ -227,14 +235,8 @@ export function OnlineGameScreen({
   const canPick = imageRevealed && !myWrongThisRound;
 
   return (
-    <ImageBackground
-      source={require("../assets/game-background.png")}
-      resizeMode="cover"
-      style={styles.bg}
-      imageStyle={styles.bgImage}
-    >
-      <View style={styles.bgOverlay}>
-        <ScrollView style={styles.scrollView} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
+    <GameCyclingBackdrop cycleIndex={cycleIndex} flash={flash} overlayStyle={styles.bgOverlay}>
+      <ScrollView style={styles.scrollView} contentContainerStyle={styles.scroll} keyboardShouldPersistTaps="handled">
           <Animated.View
             style={[styles.topBar, { opacity: topBarOpacity, transform: [{ translateY: topBarY }] }]}
           >
@@ -343,15 +345,12 @@ export function OnlineGameScreen({
             <Text style={styles.leaveBtnText}>Leave match</Text>
           </Pressable>
         </ScrollView>
-      </View>
-    </ImageBackground>
+    </GameCyclingBackdrop>
   );
 }
 
 const styles = StyleSheet.create({
-  bg: { flex: 1 },
-  bgImage: { width: "100%", height: "100%" },
-  bgOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.28)" },
+  bgOverlay: { backgroundColor: "rgba(0,0,0,0.28)" },
   scrollView: { flex: 1 },
   scroll: { flexGrow: 1, padding: 16, paddingBottom: 32 },
   topBar: {

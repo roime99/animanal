@@ -1,7 +1,8 @@
 import { ReactNode, useEffect, useRef } from "react";
-import { Animated, Easing, StyleSheet, Text, View } from "react-native";
+import { Animated, Easing, ImageBackground, StyleSheet, Text, View } from "react-native";
 
 import { FadeSlideIn } from "../components/FadeSlideIn";
+import { STATIC_MENU_BG } from "../constants/menuBackgroundAsset";
 import { ScalePress } from "../components/ScalePress";
 import type { PlayerStats } from "../services/playerStorage";
 
@@ -76,7 +77,13 @@ export function EndlessResultsScreen({
   }, [boxOp, boxScale]);
 
   return (
-    <View style={styles.container}>
+    <ImageBackground
+      source={STATIC_MENU_BG}
+      resizeMode="cover"
+      style={styles.bgRoot}
+      imageStyle={styles.bgImage}
+    >
+      <View style={styles.container}>
       <FadeSlideIn delay={0} duration={540} fromY={-24}>
         <Text style={styles.title}>Game over</Text>
       </FadeSlideIn>
@@ -154,17 +161,20 @@ export function EndlessResultsScreen({
           <Text style={styles.ghostText}>Home</Text>
         </ScalePress>
       </FadeSlideIn>
-    </View>
+      </View>
+    </ImageBackground>
   );
 }
 
 const styles = StyleSheet.create({
+  bgRoot: { flex: 1 },
+  bgImage: { width: "100%", height: "100%" },
   container: {
     flex: 1,
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
-    backgroundColor: "#fff3e0",
+    backgroundColor: "rgba(255,243,224,0.88)",
   },
   title: { fontSize: 28, fontWeight: "800", color: "#d84315", marginBottom: 6 },
   user: { fontSize: 16, fontWeight: "700", color: "#5d4037", marginBottom: 12 },

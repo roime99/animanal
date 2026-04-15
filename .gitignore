@@ -18,6 +18,14 @@ mobile/.env
 # Never ship a local image pack in this edition (Wikimedia URLs only)
 images/
 
+# Generated from repo-root `bg/` + `fonts/` by `npm run vendor:assets` in mobile/
+mobile/assets/bg/
+mobile/assets/fonts/
+
+# Font bundle / docs — keep only .otf/.ttf in git
+fonts/*.zip
+fonts/*.pdf
+
 # OS / IDE
 .DS_Store
 Thumbs.db

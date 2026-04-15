@@ -12,6 +12,7 @@ import {
 } from "react-native";
 
 import { getApiBaseUrl, wsUrl } from "../constants/api";
+import { STATIC_MENU_BG } from "../constants/menuBackgroundAsset";
 import type { GameQuestion } from "../services/gameApi";
 import {
   fetchOnlineMatchHealth,
@@ -21,6 +22,13 @@ import {
 import { BotMatchController } from "../services/botMatchController";
 import { fetchMatchCreate, fetchMatchJoin, type MatchRole } from "../services/matchApi";
 import { playCoinSound } from "../services/playCoinSound";
+import {
+  applyOnlineMatchPayout,
+  chargeOnlineMatchEntry,
+  ONLINE_MATCH_ENTRY_COST,
+  ONLINE_MATCH_WIN_REWARD,
+  type PlayerStatsNormalized,
+} from "../services/playerStorage";
 import { OnlineGameScreen } from "./OnlineGameScreen";
 import { ScalePress } from "../components/ScalePress";
 
@@ -99,6 +107,9 @@ function isGameQuestion(x: unknown): x is GameQuestion {
 type Props = {
   onBack: () => void;
   soundMuted: boolean;
+  playerNorm: string | null;
+  goldenCoins: number;
+  onPlayerEconomyUpdate: (stats: PlayerStatsNormalized) => void;
 };
 
 function hintForMatchError(message: string): string {
@@ -112,7 +123,13 @@ function hintForMatchError(message: string): string {
   return message;
 }
 
-export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
+export function OnlineMatchScreen({
+  onBack,
+  soundMuted,
+  playerNorm,
+  goldenCoins,
+  onPlayerEconomyUpdate,
+}: Props) {
   const [phase, setPhase] = useState<Phase>("menu");
   const [busy, setBusy] = useState(false);
   const [healthReachable, setHealthReachable] = useState<boolean | null>(null);
@@ -141,6 +158,8 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
   const botRef = useRef<BotMatchController | null>(null);
   const roleRef = useRef<MatchRole>("host");
   const imageReadySentRef = useRef(-1);
+  const entryFeeChargedRef = useRef(false);
+  const isPvpRef = useRef(false);
   const [opponentIsBot, setOpponentIsBot] = useState(false);
   const [startingBot, setStartingBot] = useState(false);
 
@@ -191,17 +210,53 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
           Alert.alert("Match", "Bad question payload from server — try updating the app or restarting the server.");
           return;
         }
-        imageReadySentRef.current = -1;
-        setRoundSeq(r.round_seq);
-        setCurrentQ(r.question);
-        setEndlessLevel(r.endless_level);
-        setPoolLabel(r.pool_label);
-        setHostPoints(r.host_points);
-        setGuestPoints(r.guest_points);
-        setPointsToWin(r.points_to_win ?? 10);
-        setImageRevealed(!!r.image_revealed);
-        setMyWrong(false);
-        setPhase("game");
+        const applyRound = () => {
+          imageReadySentRef.current = -1;
+          setRoundSeq(r.round_seq);
+          setCurrentQ(r.question);
+          setEndlessLevel(r.endless_level);
+          setPoolLabel(r.pool_label);
+          setHostPoints(r.host_points);
+          setGuestPoints(r.guest_points);
+          setPointsToWin(r.points_to_win ?? 10);
+          setImageRevealed(!!r.image_revealed);
+          setMyWrong(false);
+          setPhase("game");
+        };
+
+        if (botRef.current) {
+          applyRound();
+          return;
+        }
+
+        if (!playerNorm) {
+          Alert.alert("Match", "Set a username on the home screen before playing online.");
+          tearDownWs();
+          setPhase("menu");
+          setLobby(null);
+          setMode(null);
+          return;
+        }
+
+        if (!entryFeeChargedRef.current) {
+          entryFeeChargedRef.current = true;
+          void chargeOnlineMatchEntry(playerNorm)
+            .then((s) => {
+              onPlayerEconomyUpdate(s);
+              applyRound();
+            })
+            .catch((e) => {
+              entryFeeChargedRef.current = false;
+              Alert.alert("Match", e instanceof Error ? e.message : String(e));
+              tearDownWs();
+              setPhase("menu");
+              setLobby(null);
+              setMode(null);
+            });
+          return;
+        }
+
+        applyRound();
         return;
       }
       if (msg.type === "image_reveal") {
@@ -235,6 +290,16 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
         const mine = me === "host" ? m.host_points : m.guest_points;
         const theirs = me === "host" ? m.guest_points : m.host_points;
         const res = me === "host" ? m.host_result : m.guest_result;
+        const pvp = isPvpRef.current;
+        const norm = playerNorm;
+        if (pvp && norm) {
+          if (res === "win") {
+            void playCoinSound({ muted: soundMuted });
+          }
+          void applyOnlineMatchPayout(norm, res === "win")
+            .then(onPlayerEconomyUpdate)
+            .catch(() => {});
+        }
         setPointsToWin(m.points_to_win ?? 10);
         setMyPointsFinal(mine);
         setTheirPointsFinal(theirs);
@@ -252,7 +317,7 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
         return;
       }
     },
-    [soundMuted, tearDownWs]
+    [soundMuted, tearDownWs, playerNorm, onPlayerEconomyUpdate]
   );
 
   const handleMessageRef = useRef(handleMessage);
@@ -261,6 +326,8 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
   const openSocket = useCallback(
     (c: string, t: string, r: MatchRole) => {
       tearDownWs();
+      entryFeeChargedRef.current = false;
+      isPvpRef.current = true;
       const url = wsUrl(`/api/match/ws/${encodeURIComponent(c)}?token=${encodeURIComponent(t)}`);
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -284,6 +351,10 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
   );
 
   const onCreate = useCallback(async () => {
+    if (!playerNorm) {
+      Alert.alert("Match", "Set a username on the home screen first.");
+      return;
+    }
     setBusy(true);
     try {
       const res = await fetchMatchCreate();
@@ -294,12 +365,23 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [openSocket]);
+  }, [openSocket, playerNorm]);
 
   const onJoin = useCallback(async () => {
     const raw = joinInput.trim();
     if (raw.length < 4) {
       Alert.alert("Match", "Enter the 6-character code from your friend.");
+      return;
+    }
+    if (!playerNorm) {
+      Alert.alert("Match", "Set a username on the home screen first.");
+      return;
+    }
+    if (goldenCoins < ONLINE_MATCH_ENTRY_COST) {
+      Alert.alert(
+        "Match",
+        `Online 1v1 costs ${ONLINE_MATCH_ENTRY_COST} golden coins when the match starts. You have ${goldenCoins}.`
+      );
       return;
     }
     setBusy(true);
@@ -312,12 +394,14 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
     } finally {
       setBusy(false);
     }
-  }, [joinInput, openSocket]);
+  }, [joinInput, openSocket, goldenCoins, playerNorm]);
 
   const startBotMatch = useCallback(async () => {
     setStartingBot(true);
     try {
       tearDownWs();
+      entryFeeChargedRef.current = false;
+      isPvpRef.current = false;
       botRef.current?.dispose();
       botRef.current = null;
       roleRef.current = "host";
@@ -350,12 +434,23 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
       Alert.alert("Match", "Not connected — wait for “Connecting…” to finish, then try again.");
       return;
     }
+    if (!playerNorm) {
+      Alert.alert("Match", "Set a username on the home screen first.");
+      return;
+    }
+    if (goldenCoins < ONLINE_MATCH_ENTRY_COST) {
+      Alert.alert(
+        "Match",
+        `You need ${ONLINE_MATCH_ENTRY_COST} golden coins to start. You have ${goldenCoins}.`
+      );
+      return;
+    }
     try {
       ws.send(JSON.stringify({ type: "start_game" }));
     } catch (e) {
       Alert.alert("Match", e instanceof Error ? e.message : String(e));
     }
-  }, []);
+  }, [goldenCoins, playerNorm]);
 
   const sendImageReady = useCallback(() => {
     if (imageReadySentRef.current === roundSeq) return;
@@ -395,6 +490,8 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
     botRef.current?.dispose();
     botRef.current = null;
     setOpponentIsBot(false);
+    entryFeeChargedRef.current = false;
+    isPvpRef.current = false;
     roleRef.current = "host";
     imageReadySentRef.current = -1;
     setPhase("menu");
@@ -416,7 +513,7 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
   if (phase === "game" && !currentQ) {
     return (
       <ImageBackground
-        source={require("../assets/menu-background.png")}
+        source={STATIC_MENU_BG}
         resizeMode="cover"
         style={styles.bg}
         imageStyle={styles.bgImage}
@@ -467,7 +564,7 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
       myResult === "win" ? "You win!" : myResult === "lose" ? "You lost" : "It's a tie!";
     return (
       <ImageBackground
-        source={require("../assets/menu-background.png")}
+        source={STATIC_MENU_BG}
         resizeMode="cover"
         style={styles.bg}
         imageStyle={styles.bgImage}
@@ -507,7 +604,7 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
     if (!lobby) {
       return (
         <ImageBackground
-          source={require("../assets/menu-background.png")}
+          source={STATIC_MENU_BG}
           resizeMode="cover"
           style={styles.bg}
           imageStyle={styles.bgImage}
@@ -535,7 +632,7 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
     }
     return (
       <ImageBackground
-        source={require("../assets/menu-background.png")}
+        source={STATIC_MENU_BG}
         resizeMode="cover"
         style={styles.bg}
         imageStyle={styles.bgImage}
@@ -581,7 +678,7 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
 
   return (
     <ImageBackground
-      source={require("../assets/menu-background.png")}
+      source={STATIC_MENU_BG}
       resizeMode="cover"
       style={styles.bg}
       imageStyle={styles.bgImage}
@@ -604,6 +701,10 @@ export function OnlineMatchScreen({ onBack, soundMuted }: Props) {
         <Text style={styles.sub}>
           Same progressive pools as solo endless (easy → medium → hard as levels rise). No difficulty menu. Picture
           unlocks when both phones have loaded it. First correct guess scores; first to 10 points wins.
+        </Text>
+        <Text style={styles.economyHint}>
+          Online vs a friend: {ONLINE_MATCH_ENTRY_COST} golden coins each when the match starts · winner +{ONLINE_MATCH_WIN_REWARD}{" "}
+          golden coins · practice vs bot is free
         </Text>
 
         <ScalePress
@@ -703,6 +804,15 @@ const styles = StyleSheet.create({
     color: "rgba(255,248,225,0.9)",
     maxWidth: 360,
     lineHeight: 20,
+  },
+  economyHint: {
+    fontSize: 13,
+    textAlign: "center",
+    marginBottom: 16,
+    color: "#ffe082",
+    maxWidth: 360,
+    lineHeight: 19,
+    fontWeight: "700",
   },
   backendWarn: {
     fontSize: 13,
