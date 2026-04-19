@@ -14,7 +14,14 @@ from config import settings
 from routers.mgmt import router as mgmt_router
 from services import match_service as match_service_mod
 from services.mgmt_log_buffer import install_mgmt_ring_handler
-from services.match_service import MATCH_PROTOCOL_VERSION, create_room, join_room, run_match_socket
+from services.match_service import (
+    MATCH_PROTOCOL_VERSION,
+    create_room,
+    join_room,
+    list_open_rooms,
+    lookup_room,
+    run_match_socket,
+)
 from services.question_service import (
     ALLOWED_HIERARCHY_MODES,
     build_formatted_game_questions,
@@ -52,7 +59,7 @@ async def _lifespan(_app: FastAPI):
     yield
 
 
-app = FastAPI(title="Animal - Animal Trivia (embed API)", version="0.1.0", lifespan=_lifespan)
+app = FastAPI(title="Who's That Animal — Game API", version="0.1.0", lifespan=_lifespan)
 
 _MAIN_FILE = Path(__file__).resolve()
 
@@ -65,7 +72,7 @@ def ak_mgmt_probe() -> dict[str, Any]:
     """
     return {
         "ok": True,
-        "app": "animal_trivia_embed_api",
+        "app": "whos_that_animal_game_api",
         "main_py": str(_MAIN_FILE),
     }
 
@@ -156,15 +163,22 @@ class GameStartResponse(BaseModel):
     embed_mode: bool = Field(default=False, description="Echo of request: Wikimedia-only images + optional embed HTML.")
 
 
+class MatchCreateBody(BaseModel):
+    entry_cost: int = Field(default=50, ge=1, le=100_000)
+    password: str | None = Field(default=None, max_length=64)
+
+
 class MatchCreateResponse(BaseModel):
     ok: bool = True
     code: str
     token: str
     role: str = "host"
+    entry_cost: int = 50
 
 
 class MatchJoinBody(BaseModel):
     code: str
+    password: str | None = None
 
 
 class MatchJoinResponse(BaseModel):
@@ -172,6 +186,7 @@ class MatchJoinResponse(BaseModel):
     code: str
     token: str
     role: str = "guest"
+    entry_cost: int = 50
 
 
 @app.get("/health")
@@ -196,22 +211,38 @@ def match_server_info() -> dict[str, Any]:
 
 
 @app.post("/api/match/create", response_model=MatchCreateResponse)
-def api_match_create() -> MatchCreateResponse:
-    code, token = create_room()
-    return MatchCreateResponse(code=code, token=token)
+def api_match_create(body: MatchCreateBody | None = None) -> MatchCreateResponse:
+    b = body if body is not None else MatchCreateBody()
+    code, token, entry_cost = create_room(entry_cost=b.entry_cost, password=b.password)
+    return MatchCreateResponse(code=code, token=token, entry_cost=entry_cost)
+
+
+@app.get("/api/match/open")
+def api_match_open() -> dict[str, Any]:
+    return {"ok": True, "open": list_open_rooms()}
+
+
+@app.get("/api/match/lookup")
+def api_match_lookup(code: str = Query(..., min_length=3)) -> dict[str, Any]:
+    info = lookup_room(code)
+    if not info:
+        raise HTTPException(status_code=404, detail="No open match found for that code.") from None
+    return {"ok": True, **info}
 
 
 @app.post("/api/match/join", response_model=MatchJoinResponse)
 def api_match_join(body: MatchJoinBody) -> MatchJoinResponse:
     try:
-        room, token = join_room(body.code)
+        room, token = join_room(body.code, body.password)
     except KeyError:
         raise HTTPException(status_code=404, detail="No match found for that code.") from None
     except RuntimeError as exc:
         if str(exc) == "ROOM_FULL":
             raise HTTPException(status_code=409, detail="That match already has a guest.") from exc
+        if str(exc) == "BAD_PASSWORD":
+            raise HTTPException(status_code=403, detail="Wrong password for this match.") from exc
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return MatchJoinResponse(code=room.code, token=token)
+    return MatchJoinResponse(code=room.code, token=token, entry_cost=room.entry_cost)
 
 
 @app.websocket("/api/match/ws/{code}")
@@ -226,8 +257,6 @@ def api_case_pool(
         description="If true, never use on-disk images; add image_embed_html (Commons embed) per row.",
     ),
 ) -> CasePoolResponse:
-    if settings.embed_only:
-        embed_mode = True
     db_path: Path = settings.db_path
     if not db_path.is_file():
         raise HTTPException(
@@ -304,9 +333,6 @@ def api_game_start(
             status_code=503,
             detail=f"Database not found at {db_path}. Place animals.db in the project root (same folder as app.py).",
         )
-
-    if settings.embed_only:
-        embed_mode = True
 
     ex_names = frozenset(
         x.strip().lower() for x in (exclude_animal_names or []) if x.strip()

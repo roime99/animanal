@@ -23,7 +23,7 @@ CODE_ALPHABET = string.ascii_uppercase + string.digits
 
 POINTS_TO_WIN = 10
 # Bumped when online match contract changes; exposed on GET /health.
-MATCH_PROTOCOL_VERSION = 2
+MATCH_PROTOCOL_VERSION = 3
 
 log = logging.getLogger(__name__)
 
@@ -71,6 +71,9 @@ class MatchRoom:
     host_ws: WebSocket | None = None
     guest_ws: WebSocket | None = None
 
+    entry_cost: int = 50
+    password: str | None = None
+
     def role_for_token(self, token: str) -> Role | None:
         if token == self.host_token:
             return "host"
@@ -96,26 +99,69 @@ def _new_token() -> str:
     return secrets.token_urlsafe(32)
 
 
-def create_room() -> tuple[str, str]:
+def create_room(entry_cost: int = 50, password: str | None = None) -> tuple[str, str, int]:
+    cost = max(1, min(100_000, int(entry_cost)))
+    pw = (password or "").strip() or None
     for _ in range(80):
         code = "".join(secrets.choice(CODE_ALPHABET) for _ in range(6))
         if code not in rooms:
-            room = MatchRoom(code=code, host_token=_new_token(), guest_token=None)
+            room = MatchRoom(
+                code=code,
+                host_token=_new_token(),
+                guest_token=None,
+                entry_cost=cost,
+                password=pw,
+            )
             rooms[code] = room
-            return code, room.host_token
+            return code, room.host_token, room.entry_cost
     raise RuntimeError("Could not allocate a room code")
 
 
-def join_room(raw_code: str) -> tuple[MatchRoom, str]:
+def join_room(raw_code: str, password: str | None = None) -> tuple[MatchRoom, str]:
     code = _normalize_code(raw_code)
     room = rooms.get(code)
     if not room:
         raise KeyError("ROOM_NOT_FOUND")
     if room.guest_token is not None:
         raise RuntimeError("ROOM_FULL")
+    if room.password is not None:
+        if (password or "").strip() != room.password:
+            raise RuntimeError("BAD_PASSWORD")
     token = _new_token()
     room.guest_token = token
     return room, token
+
+
+def lookup_room(raw_code: str) -> dict[str, Any] | None:
+    """Public info for joining by code (no guest slot taken)."""
+    code = _normalize_code(raw_code)
+    room = rooms.get(code)
+    if not room:
+        return None
+    if room.phase != "lobby" or room.guest_token is not None:
+        return None
+    return {
+        "code": room.code,
+        "entry_cost": room.entry_cost,
+        "has_password": room.password is not None,
+    }
+
+
+def list_open_rooms() -> list[dict[str, Any]]:
+    """Rooms in lobby, no guest yet, host WebSocket still connected (listed in battle list)."""
+    out: list[dict[str, Any]] = []
+    for code, room in rooms.items():
+        if room.phase != "lobby" or room.guest_token is not None or room.host_ws is None:
+            continue
+        out.append(
+            {
+                "code": code,
+                "entry_cost": room.entry_cost,
+                "has_password": room.password is not None,
+            }
+        )
+    out.sort(key=lambda x: x["code"])
+    return out
 
 
 async def _broadcast(room: MatchRoom, payload: dict[str, Any]) -> None:
@@ -138,6 +184,7 @@ async def _lobby_snapshot(room: MatchRoom) -> None:
             "guest_joined": guest_joined,
             "both_connected": both_ws,
             "can_start": bool(guest_joined and both_ws and room.phase == "lobby"),
+            "entry_cost": room.entry_cost,
         },
     )
 
@@ -434,4 +481,7 @@ async def run_match_socket(websocket: WebSocket, raw_code: str, token: str) -> N
         async with room.lock:
             if room.ws_for(role) is websocket:
                 room.set_ws(role, None)
-            await _lobby_snapshot(room)
+            if role == "host" and room.guest_token is None and room.phase == "lobby":
+                rooms.pop(code, None)
+            elif rooms.get(code) is room:
+                await _lobby_snapshot(room)

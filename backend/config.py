@@ -1,10 +1,8 @@
 from pathlib import Path
 
-from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
-# Repo root = parent of backend/ (same folder as app.py, animals.db).
-# This distribution is embed-only: no `images/` folder is required or used.
+# Repo root = parent of backend/ (same folder as app.py, animals.db, images/)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 
 
@@ -13,10 +11,6 @@ class Settings(BaseSettings):
 
     db_path: Path = _REPO_ROOT / "animals.db"
     images_dir: Path = _REPO_ROOT / "images"
-    embed_only: bool = Field(
-        default=True,
-        description="If True, never serve /api/images; Wikimedia URLs from DB only (Animal Trivia embed edition).",
-    )
 
 
 settings = Settings()

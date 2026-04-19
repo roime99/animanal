@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   ImageBackground,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -19,14 +20,19 @@ import {
   isOnlineMatchBackendCurrent,
   ONLINE_MATCH_PROTOCOL_EXPECTED,
 } from "../services/backendHealth";
-import { BotMatchController } from "../services/botMatchController";
-import { fetchMatchCreate, fetchMatchJoin, type MatchRole } from "../services/matchApi";
+import {
+  fetchMatchCreate,
+  fetchMatchJoin,
+  fetchMatchLookup,
+  fetchMatchOpenList,
+  type MatchRole,
+  type OpenMatchRow,
+} from "../services/matchApi";
 import { playCoinSound } from "../services/playCoinSound";
 import {
   applyOnlineMatchPayout,
   chargeOnlineMatchEntry,
-  ONLINE_MATCH_ENTRY_COST,
-  ONLINE_MATCH_WIN_REWARD,
+  DEFAULT_ONLINE_MATCH_ENTRY_COST,
   type PlayerStatsNormalized,
 } from "../services/playerStorage";
 import { OnlineGameScreen } from "./OnlineGameScreen";
@@ -40,6 +46,7 @@ type LobbyMsg = {
   guest_joined: boolean;
   both_connected: boolean;
   can_start: boolean;
+  entry_cost?: number;
 };
 
 type RoundStartMsg = {
@@ -155,13 +162,17 @@ export function OnlineMatchScreen({
   const [theirPointsFinal, setTheirPointsFinal] = useState(0);
 
   const wsRef = useRef<WebSocket | null>(null);
-  const botRef = useRef<BotMatchController | null>(null);
   const roleRef = useRef<MatchRole>("host");
   const imageReadySentRef = useRef(-1);
   const entryFeeChargedRef = useRef(false);
-  const isPvpRef = useRef(false);
-  const [opponentIsBot, setOpponentIsBot] = useState(false);
-  const [startingBot, setStartingBot] = useState(false);
+  const matchEntryCostRef = useRef(DEFAULT_ONLINE_MATCH_ENTRY_COST);
+
+  const [openBattles, setOpenBattles] = useState<OpenMatchRow[]>([]);
+  const [createEntryCostStr, setCreateEntryCostStr] = useState(String(DEFAULT_ONLINE_MATCH_ENTRY_COST));
+  const [createPassword, setCreatePassword] = useState("");
+  const [joinPassword, setJoinPassword] = useState("");
+  const [passwordModalRow, setPasswordModalRow] = useState<OpenMatchRow | null>(null);
+  const [modalPassword, setModalPassword] = useState("");
 
   const tearDownWs = useCallback(() => {
     const w = wsRef.current;
@@ -176,8 +187,6 @@ export function OnlineMatchScreen({
   useEffect(() => {
     return () => {
       tearDownWs();
-      botRef.current?.dispose();
-      botRef.current = null;
     };
   }, [tearDownWs]);
 
@@ -196,12 +205,35 @@ export function OnlineMatchScreen({
     };
   }, [phase]);
 
+  useEffect(() => {
+    if (phase !== "menu") return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const list = await fetchMatchOpenList();
+        if (!cancelled) setOpenBattles(list);
+      } catch {
+        if (!cancelled) setOpenBattles([]);
+      }
+    };
+    tick();
+    const id = setInterval(tick, 2500);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [phase]);
+
   const handleMessage = useCallback(
     (raw: unknown) => {
       if (!raw || typeof raw !== "object") return;
       const msg = raw as { type?: string };
       if (msg.type === "lobby") {
-        setLobby(msg as LobbyMsg);
+        const lm = msg as LobbyMsg;
+        setLobby(lm);
+        if (typeof lm.entry_cost === "number" && lm.entry_cost > 0) {
+          matchEntryCostRef.current = lm.entry_cost;
+        }
         return;
       }
       if (msg.type === "round_start") {
@@ -224,13 +256,8 @@ export function OnlineMatchScreen({
           setPhase("game");
         };
 
-        if (botRef.current) {
-          applyRound();
-          return;
-        }
-
         if (!playerNorm) {
-          Alert.alert("Match", "Set a username on the home screen before playing online.");
+          Alert.alert("Match", "You need to be signed in to play online.");
           tearDownWs();
           setPhase("menu");
           setLobby(null);
@@ -240,7 +267,7 @@ export function OnlineMatchScreen({
 
         if (!entryFeeChargedRef.current) {
           entryFeeChargedRef.current = true;
-          void chargeOnlineMatchEntry(playerNorm)
+          void chargeOnlineMatchEntry(playerNorm, matchEntryCostRef.current)
             .then((s) => {
               onPlayerEconomyUpdate(s);
               applyRound();
@@ -290,13 +317,12 @@ export function OnlineMatchScreen({
         const mine = me === "host" ? m.host_points : m.guest_points;
         const theirs = me === "host" ? m.guest_points : m.host_points;
         const res = me === "host" ? m.host_result : m.guest_result;
-        const pvp = isPvpRef.current;
         const norm = playerNorm;
-        if (pvp && norm) {
+        if (norm) {
           if (res === "win") {
             void playCoinSound({ muted: soundMuted });
           }
-          void applyOnlineMatchPayout(norm, res === "win")
+          void applyOnlineMatchPayout(norm, res === "win", matchEntryCostRef.current)
             .then(onPlayerEconomyUpdate)
             .catch(() => {});
         }
@@ -306,9 +332,6 @@ export function OnlineMatchScreen({
         setMyResult(res);
         setPhase("results");
         tearDownWs();
-        botRef.current?.dispose();
-        botRef.current = null;
-        setOpponentIsBot(false);
         return;
       }
       if (msg.type === "error") {
@@ -320,14 +343,11 @@ export function OnlineMatchScreen({
     [soundMuted, tearDownWs, playerNorm, onPlayerEconomyUpdate]
   );
 
-  const handleMessageRef = useRef(handleMessage);
-  handleMessageRef.current = handleMessage;
-
   const openSocket = useCallback(
-    (c: string, t: string, r: MatchRole) => {
+    (c: string, t: string, r: MatchRole, entryCost: number) => {
       tearDownWs();
       entryFeeChargedRef.current = false;
-      isPvpRef.current = true;
+      matchEntryCostRef.current = entryCost;
       const url = wsUrl(`/api/match/ws/${encodeURIComponent(c)}?token=${encodeURIComponent(t)}`);
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -352,81 +372,89 @@ export function OnlineMatchScreen({
 
   const onCreate = useCallback(async () => {
     if (!playerNorm) {
-      Alert.alert("Match", "Set a username on the home screen first.");
+      Alert.alert("Match", "You need to be signed in to play online.");
       return;
     }
+    const parsed = parseInt(createEntryCostStr.trim(), 10);
+    const entry_cost =
+      Number.isFinite(parsed) && parsed >= 1 ? Math.min(100_000, parsed) : DEFAULT_ONLINE_MATCH_ENTRY_COST;
     setBusy(true);
     try {
-      const res = await fetchMatchCreate();
-      openSocket(res.code, res.token, "host");
+      const res = await fetchMatchCreate({
+        entry_cost,
+        password: createPassword.trim() || null,
+      });
+      openSocket(res.code, res.token, "host", res.entry_cost);
       setMode("create");
     } catch (e) {
       Alert.alert("Match", e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [openSocket, playerNorm]);
+  }, [openSocket, playerNorm, createEntryCostStr, createPassword]);
 
   const onJoin = useCallback(async () => {
     const raw = joinInput.trim();
     if (raw.length < 4) {
-      Alert.alert("Match", "Enter the 6-character code from your friend.");
+      Alert.alert("Match", "Enter the match code.");
       return;
     }
     if (!playerNorm) {
-      Alert.alert("Match", "Set a username on the home screen first.");
-      return;
-    }
-    if (goldenCoins < ONLINE_MATCH_ENTRY_COST) {
-      Alert.alert(
-        "Match",
-        `Online 1v1 costs ${ONLINE_MATCH_ENTRY_COST} golden coins when the match starts. You have ${goldenCoins}.`
-      );
+      Alert.alert("Match", "You need to be signed in to play online.");
       return;
     }
     setBusy(true);
     try {
-      const res = await fetchMatchJoin(raw);
-      openSocket(res.code, res.token, "guest");
+      const info = await fetchMatchLookup(raw);
+      if (goldenCoins < info.entry_cost) {
+        Alert.alert(
+          "Match",
+          `This match costs ${info.entry_cost} golden coins when it starts. You have ${goldenCoins}.`
+        );
+        return;
+      }
+      if (info.has_password && !joinPassword.trim()) {
+        Alert.alert("Match", "This match is password-protected. Enter the password below.");
+        return;
+      }
+      const res = await fetchMatchJoin(raw, joinPassword.trim() || null);
+      openSocket(res.code, res.token, "guest", res.entry_cost);
       setMode("join");
     } catch (e) {
       Alert.alert("Match", e instanceof Error ? e.message : String(e));
     } finally {
       setBusy(false);
     }
-  }, [joinInput, openSocket, goldenCoins, playerNorm]);
+  }, [joinInput, joinPassword, openSocket, goldenCoins, playerNorm]);
 
-  const startBotMatch = useCallback(async () => {
-    setStartingBot(true);
-    try {
-      tearDownWs();
-      entryFeeChargedRef.current = false;
-      isPvpRef.current = false;
-      botRef.current?.dispose();
-      botRef.current = null;
-      roleRef.current = "host";
-      setRole("host");
-      setMode(null);
-      setLobby(null);
-      imageReadySentRef.current = -1;
-      setPhase("game");
-      setCurrentQ(null);
-      setOpponentIsBot(true);
-      const bot = new BotMatchController((msg) => {
-        handleMessageRef.current?.(msg);
-      });
-      botRef.current = bot;
-      await bot.start();
-    } catch (e) {
-      botRef.current?.dispose();
-      botRef.current = null;
-      setOpponentIsBot(false);
-      setPhase("menu");
-      Alert.alert("Match", e instanceof Error ? e.message : String(e));
-    } finally {
-      setStartingBot(false);
-    }
-  }, [tearDownWs]);
+  const joinBattleFromList = useCallback(
+    async (row: OpenMatchRow, password: string | null) => {
+      if (!playerNorm) {
+        Alert.alert("Match", "You need to be signed in to play online.");
+        return;
+      }
+      if (goldenCoins < row.entry_cost) {
+        Alert.alert(
+          "Match",
+          `This match costs ${row.entry_cost} golden coins when it starts. You have ${goldenCoins}.`
+        );
+        return;
+      }
+      setBusy(true);
+      try {
+        const res = await fetchMatchJoin(row.code, password);
+        openSocket(res.code, res.token, "guest", res.entry_cost);
+        setMode("join");
+        setPasswordModalRow(null);
+        setModalPassword("");
+      } catch (e) {
+        Alert.alert("Match", e instanceof Error ? e.message : String(e));
+      } finally {
+        setBusy(false);
+      }
+    },
+    [goldenCoins, openSocket, playerNorm]
+  );
 
   const startMatch = useCallback(() => {
     const ws = wsRef.current;
@@ -435,14 +463,12 @@ export function OnlineMatchScreen({
       return;
     }
     if (!playerNorm) {
-      Alert.alert("Match", "Set a username on the home screen first.");
+      Alert.alert("Match", "You need to be signed in to play online.");
       return;
     }
-    if (goldenCoins < ONLINE_MATCH_ENTRY_COST) {
-      Alert.alert(
-        "Match",
-        `You need ${ONLINE_MATCH_ENTRY_COST} golden coins to start. You have ${goldenCoins}.`
-      );
+    const stake = lobby?.entry_cost ?? matchEntryCostRef.current;
+    if (goldenCoins < stake) {
+      Alert.alert("Match", `You need ${stake} golden coins when the match starts. You have ${goldenCoins}.`);
       return;
     }
     try {
@@ -450,16 +476,10 @@ export function OnlineMatchScreen({
     } catch (e) {
       Alert.alert("Match", e instanceof Error ? e.message : String(e));
     }
-  }, [goldenCoins, playerNorm]);
+  }, [goldenCoins, playerNorm, lobby?.entry_cost]);
 
   const sendImageReady = useCallback(() => {
     if (imageReadySentRef.current === roundSeq) return;
-    const bot = botRef.current;
-    if (bot) {
-      imageReadySentRef.current = roundSeq;
-      bot.userImageReady();
-      return;
-    }
     const ws = wsRef.current;
     if (!ws || !isWsOpen(ws)) return;
     imageReadySentRef.current = roundSeq;
@@ -471,11 +491,6 @@ export function OnlineMatchScreen({
   }, [roundSeq]);
 
   const sendGuess = useCallback((choice: string) => {
-    const bot = botRef.current;
-    if (bot) {
-      bot.userGuess(choice);
-      return;
-    }
     const ws = wsRef.current;
     if (!ws || !isWsOpen(ws)) return;
     try {
@@ -487,11 +502,8 @@ export function OnlineMatchScreen({
 
   const resetToMenu = useCallback(() => {
     tearDownWs();
-    botRef.current?.dispose();
-    botRef.current = null;
-    setOpponentIsBot(false);
     entryFeeChargedRef.current = false;
-    isPvpRef.current = false;
+    matchEntryCostRef.current = DEFAULT_ONLINE_MATCH_ENTRY_COST;
     roleRef.current = "host";
     imageReadySentRef.current = -1;
     setPhase("menu");
@@ -539,7 +551,6 @@ export function OnlineMatchScreen({
         pointsToWin={pointsToWin}
         imageRevealed={imageRevealed}
         myWrongThisRound={myWrong}
-        opponentIsBot={opponentIsBot}
         onImageReady={sendImageReady}
         onGuess={sendGuess}
         onBack={() => {
@@ -639,7 +650,11 @@ export function OnlineMatchScreen({
       >
         <ScrollView contentContainerStyle={styles.lobbyScroll}>
           <View style={styles.overlay}>
-            <Text style={styles.title}>1 v 1 online</Text>
+            <Text style={styles.title}>Play online</Text>
+            <Text style={styles.stakeLine}>
+              Stake 🪙 {lobby.entry_cost ?? DEFAULT_ONLINE_MATCH_ENTRY_COST} each · winner +🪙{" "}
+              {(lobby.entry_cost ?? DEFAULT_ONLINE_MATCH_ENTRY_COST) * 2}
+            </Text>
             <Text style={styles.codeLabel}>{isHost ? "Share this code" : "You're in"}</Text>
             <Text style={styles.codeBig}>{lobby.code}</Text>
             <Text style={styles.hint}>{hint}</Text>
@@ -683,92 +698,210 @@ export function OnlineMatchScreen({
       style={styles.bg}
       imageStyle={styles.bgImage}
     >
-      <View style={styles.overlay}>
-        <Text style={styles.title}>1 v 1 online</Text>
-        {backendStale ? (
-          <Text style={styles.backendWarn}>
-            API {getApiBaseUrl()} is not the current online-match server (need protocol v{ONLINE_MATCH_PROTOCOL_EXPECTED}
-            {backendProtocol === null ? "; /health has no online_match_protocol" : `; health says v${backendProtocol}`}).
-            On the PC: netstat -ano | findstr :8000 — only your uvicorn should use the port. Then from animals_kingdom/backend:
-            py -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+      <Modal
+        visible={passwordModalRow !== null}
+        transparent
+        animationType="fade"
+        onRequestClose={() => {
+          setPasswordModalRow(null);
+          setModalPassword("");
+        }}
+      >
+        <View style={styles.modalBackdrop}>
+          <Pressable
+            accessibilityRole="button"
+            accessibilityLabel="Dismiss"
+            style={StyleSheet.absoluteFillObject}
+            onPress={() => {
+              setPasswordModalRow(null);
+              setModalPassword("");
+            }}
+          />
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>Password</Text>
+            <Text style={styles.modalSub}>
+              Match {passwordModalRow?.code} · 🪙 {passwordModalRow?.entry_cost}
+            </Text>
+            <TextInput
+              value={modalPassword}
+              onChangeText={setModalPassword}
+              placeholder="Password"
+              placeholderTextColor="#888"
+              secureTextEntry
+              autoCapitalize="none"
+              autoCorrect={false}
+              style={styles.modalInput}
+              editable={!busy}
+            />
+            <ScalePress
+              accessibilityRole="button"
+              accessibilityLabel="Join with password"
+              style={[styles.primaryBtn, busy && styles.disabled]}
+              scaleTo={0.97}
+              onPress={() => {
+                if (!passwordModalRow) return;
+                void joinBattleFromList(passwordModalRow, modalPassword.trim());
+              }}
+              disabled={busy}
+            >
+              {busy ? (
+                <ActivityIndicator color="#3e2723" />
+              ) : (
+                <Text style={styles.primaryBtnText}>Join</Text>
+              )}
+            </ScalePress>
+            <Pressable
+              accessibilityRole="button"
+              style={styles.modalCancel}
+              onPress={() => {
+                setPasswordModalRow(null);
+                setModalPassword("");
+              }}
+            >
+              <Text style={styles.secondaryBtnText}>Cancel</Text>
+            </Pressable>
+          </View>
+        </View>
+      </Modal>
+
+      <ScrollView
+        style={styles.menuScroll}
+        contentContainerStyle={styles.menuScrollContent}
+        keyboardShouldPersistTaps="handled"
+      >
+        <View style={styles.overlay}>
+          <Text style={styles.title}>Play online</Text>
+          {backendStale ? (
+            <Text style={styles.backendWarn}>
+              API {getApiBaseUrl()} is not the current online-match server (need protocol v{ONLINE_MATCH_PROTOCOL_EXPECTED}
+              {backendProtocol === null ? "; /health has no online_match_protocol" : `; health says v${backendProtocol}`}).
+              On the PC: netstat -ano | findstr :8000 — only your uvicorn should use the port. Then from animals_kingdom/backend:
+              py -m uvicorn main:app --reload --host 0.0.0.0 --port 8000
+            </Text>
+          ) : null}
+          {healthUnreachable ? (
+            <Text style={styles.backendHint}>
+              Could not reach /health — check EXPO_PUBLIC_API_URL and that FastAPI is running on this machine.
+            </Text>
+          ) : null}
+          <Text style={styles.sub}>
+            Same rules as solo endless (easy → medium → hard). First correct wins the round; first to 10 points wins the
+            duel. The host sets the stake (default {DEFAULT_ONLINE_MATCH_ENTRY_COST} each); winner earns 2× stake.
           </Text>
-        ) : null}
-        {healthUnreachable ? (
-          <Text style={styles.backendHint}>
-            Could not reach /health — check EXPO_PUBLIC_API_URL and that FastAPI is running on this machine.
-          </Text>
-        ) : null}
-        <Text style={styles.sub}>
-          Same progressive pools as solo endless (easy → medium → hard as levels rise). No difficulty menu. Picture
-          unlocks when both phones have loaded it. First correct guess scores; first to 10 points wins.
-        </Text>
-        <Text style={styles.economyHint}>
-          Online vs a friend: {ONLINE_MATCH_ENTRY_COST} golden coins each when the match starts · winner +{ONLINE_MATCH_WIN_REWARD}{" "}
-          golden coins · practice vs bot is free
-        </Text>
 
-        <ScalePress
-          accessibilityRole="button"
-          accessibilityLabel="Practice versus bot"
-          style={[styles.botBtn, (busy || startingBot) && styles.disabled]}
-          scaleTo={0.97}
-          onPress={startBotMatch}
-          disabled={busy || startingBot}
-        >
-          {startingBot ? <ActivityIndicator color="#ffecb3" /> : <Text style={styles.botBtnText}>Practice vs bot</Text>}
-        </ScalePress>
-        <Text style={styles.botHint}>No second device — uses the API for questions (same as solo).</Text>
-
-        <Text style={styles.or}>play online</Text>
-
-        <ScalePress
-          accessibilityRole="button"
-          accessibilityLabel="Create match"
-          style={[styles.primaryBtn, busy && styles.disabled]}
-          scaleTo={0.97}
-          onPress={onCreate}
-          disabled={busy}
-        >
-          {busy && mode === null ? (
-            <ActivityIndicator color="#3e2723" />
+          <Text style={styles.sectionLabel}>Open battles</Text>
+          {openBattles.length === 0 ? (
+            <Text style={styles.emptyList}>No open battles — create one or join with a code.</Text>
           ) : (
-            <Text style={styles.primaryBtnText}>Create match</Text>
+            openBattles.map((row) => (
+              <Pressable
+                key={row.code}
+                accessibilityRole="button"
+                accessibilityLabel={`Join match ${row.code}`}
+                style={({ pressed }) => [styles.battleRow, pressed && styles.battleRowPressed]}
+                onPress={() => {
+                  if (row.has_password) {
+                    setPasswordModalRow(row);
+                    setModalPassword("");
+                  } else {
+                    void joinBattleFromList(row, null);
+                  }
+                }}
+                disabled={busy}
+              >
+                <View style={styles.battleRowMain}>
+                  <Text style={styles.battleRowCode}>{row.code}</Text>
+                  <Text style={styles.battleRowMeta}>
+                    🪙 {row.entry_cost} each · {row.has_password ? "🔒 locked" : "open"}
+                  </Text>
+                </View>
+                <Text style={styles.battleRowHint}>Tap to join</Text>
+              </Pressable>
+            ))
           )}
-        </ScalePress>
 
-        <Text style={styles.or}>or</Text>
+          <Text style={styles.sectionLabel}>Create battle</Text>
+          <Text style={styles.fieldHint}>Stake (golden coins each player pays when the match starts)</Text>
+          <TextInput
+            value={createEntryCostStr}
+            onChangeText={setCreateEntryCostStr}
+            placeholder={String(DEFAULT_ONLINE_MATCH_ENTRY_COST)}
+            placeholderTextColor="#9e9e9e"
+            keyboardType="number-pad"
+            editable={!busy}
+            style={styles.smallInput}
+          />
+          <Text style={styles.fieldHint}>Password (optional — only players with the password can join)</Text>
+          <TextInput
+            value={createPassword}
+            onChangeText={setCreatePassword}
+            placeholder="Leave empty for a public battle"
+            placeholderTextColor="#9e9e9e"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!busy}
+            style={styles.smallInput}
+          />
+          <ScalePress
+            accessibilityRole="button"
+            accessibilityLabel="Create battle"
+            style={[styles.primaryBtn, busy && styles.disabled]}
+            scaleTo={0.97}
+            onPress={onCreate}
+            disabled={busy}
+          >
+            {busy ? (
+              <ActivityIndicator color="#3e2723" />
+            ) : (
+              <Text style={styles.primaryBtnText}>Create battle</Text>
+            )}
+          </ScalePress>
 
-        <Text style={styles.label}>Join with code</Text>
-        <TextInput
-          value={joinInput}
-          onChangeText={(t) => setJoinInput(t.toUpperCase())}
-          placeholder="e.g. A1B2C3"
-          placeholderTextColor="#bdbdbd"
-          autoCapitalize="characters"
-          autoCorrect={false}
-          maxLength={8}
-          editable={!busy}
-          style={styles.input}
-        />
-        <ScalePress
-          accessibilityRole="button"
-          accessibilityLabel="Join match"
-          style={[styles.primaryBtn, busy && styles.disabled]}
-          scaleTo={0.97}
-          onPress={onJoin}
-          disabled={busy}
-        >
-          {busy && mode === null ? (
-            <ActivityIndicator color="#3e2723" />
-          ) : (
-            <Text style={styles.primaryBtnText}>Join</Text>
-          )}
-        </ScalePress>
+          <Text style={styles.sectionLabel}>Join with code</Text>
+          <TextInput
+            value={joinInput}
+            onChangeText={(t) => setJoinInput(t.toUpperCase())}
+            placeholder="Match code"
+            placeholderTextColor="#bdbdbd"
+            autoCapitalize="characters"
+            autoCorrect={false}
+            maxLength={8}
+            editable={!busy}
+            style={styles.input}
+          />
+          <Text style={styles.fieldHint}>Password (only if the host locked the match)</Text>
+          <TextInput
+            value={joinPassword}
+            onChangeText={setJoinPassword}
+            placeholder="Optional"
+            placeholderTextColor="#9e9e9e"
+            secureTextEntry
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!busy}
+            style={styles.smallInput}
+          />
+          <ScalePress
+            accessibilityRole="button"
+            accessibilityLabel="Join match"
+            style={[styles.primaryBtn, busy && styles.disabled]}
+            scaleTo={0.97}
+            onPress={onJoin}
+            disabled={busy}
+          >
+            {busy ? (
+              <ActivityIndicator color="#3e2723" />
+            ) : (
+              <Text style={styles.primaryBtnText}>Join</Text>
+            )}
+          </ScalePress>
 
-        <Pressable accessibilityRole="button" accessibilityLabel="Back" style={styles.linkBtn} onPress={onBack}>
-          <Text style={styles.linkText}>Back</Text>
-        </Pressable>
-      </View>
+          <Pressable accessibilityRole="button" accessibilityLabel="Back" style={styles.linkBtn} onPress={onBack}>
+            <Text style={styles.linkText}>Back</Text>
+          </Pressable>
+        </View>
+      </ScrollView>
     </ImageBackground>
   );
 }
@@ -776,12 +909,117 @@ export function OnlineMatchScreen({
 const styles = StyleSheet.create({
   bg: { flex: 1 },
   bgImage: { width: "100%", height: "100%" },
+  menuScroll: { flex: 1 },
+  menuScrollContent: {
+    flexGrow: 1,
+    alignItems: "center",
+    paddingBottom: 28,
+  },
   overlay: {
+    alignItems: "center",
+    padding: 24,
+    paddingTop: 16,
+    backgroundColor: "rgba(20, 12, 8, 0.55)",
+    width: "100%",
+    maxWidth: 440,
+  },
+  modalBackdrop: {
     flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
-    backgroundColor: "rgba(20, 12, 8, 0.55)",
+  },
+  modalCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#fffef7",
+    borderRadius: 16,
+    padding: 20,
+    borderWidth: 2,
+    borderColor: "#ffb300",
+  },
+  modalTitle: { fontSize: 20, fontWeight: "800", color: "#3e2723", marginBottom: 6 },
+  modalSub: { fontSize: 14, color: "#5d4037", marginBottom: 14 },
+  modalInput: {
+    borderWidth: 2,
+    borderColor: "#cfd8dc",
+    borderRadius: 10,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    fontSize: 16,
+    marginBottom: 14,
+    color: "#1b1b1b",
+  },
+  modalCancel: { alignSelf: "center", paddingVertical: 10, marginTop: 4 },
+  sectionLabel: {
+    alignSelf: "flex-start",
+    width: "100%",
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#ffecb3",
+    marginTop: 18,
+    marginBottom: 8,
+  },
+  fieldHint: {
+    alignSelf: "flex-start",
+    width: "100%",
+    fontSize: 12,
+    color: "rgba(255,248,225,0.85)",
+    marginBottom: 6,
+    lineHeight: 17,
+  },
+  emptyList: {
+    fontSize: 14,
+    color: "rgba(255,248,225,0.8)",
+    textAlign: "center",
+    marginBottom: 8,
+    lineHeight: 20,
+    maxWidth: 360,
+  },
+  battleRow: {
+    width: "100%",
+    maxWidth: 360,
+    paddingVertical: 12,
+    paddingHorizontal: 14,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.28)",
+    borderWidth: 1,
+    borderColor: "rgba(255,224,130,0.35)",
+    marginBottom: 8,
+  },
+  battleRowPressed: { opacity: 0.88 },
+  battleRowMain: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  battleRowCode: {
+    fontSize: 22,
+    fontWeight: "900",
+    letterSpacing: 4,
+    color: "#fff8e1",
+  },
+  battleRowMeta: { fontSize: 13, fontWeight: "700", color: "#ffe082" },
+  battleRowHint: { fontSize: 12, color: "rgba(255,248,225,0.7)", marginTop: 4 },
+  smallInput: {
+    width: "100%",
+    maxWidth: 360,
+    borderWidth: 2,
+    borderColor: "#ffb300",
+    borderRadius: 10,
+    paddingVertical: 10,
+    paddingHorizontal: 12,
+    fontSize: 16,
+    fontWeight: "600",
+    backgroundColor: "rgba(255,255,255,0.95)",
+    color: "#1b1b1b",
+    marginBottom: 12,
+  },
+  stakeLine: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#ffe082",
+    textAlign: "center",
+    marginBottom: 10,
+    maxWidth: 360,
+    lineHeight: 20,
   },
   lobbyScroll: {
     flexGrow: 1,
@@ -830,26 +1068,6 @@ const styles = StyleSheet.create({
     color: "#ffecb3",
     maxWidth: 360,
     lineHeight: 18,
-  },
-  botBtn: {
-    marginBottom: 8,
-    paddingVertical: 13,
-    paddingHorizontal: 28,
-    borderRadius: 14,
-    borderWidth: 2,
-    borderColor: "#ffecb3",
-    backgroundColor: "rgba(255,243,224,0.12)",
-    minWidth: 220,
-    alignItems: "center",
-  },
-  botBtnText: { color: "#fff8e1", fontSize: 17, fontWeight: "800" },
-  botHint: {
-    fontSize: 12,
-    textAlign: "center",
-    color: "rgba(255,248,225,0.75)",
-    maxWidth: 340,
-    marginBottom: 6,
-    lineHeight: 17,
   },
   or: { marginVertical: 14, color: "rgba(255,248,225,0.85)", fontWeight: "700" },
   label: {

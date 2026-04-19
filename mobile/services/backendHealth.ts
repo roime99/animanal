@@ -1,8 +1,8 @@
 import { apiUrl } from "../constants/api";
-import { apiFetch, readApiJson } from "../utils/apiFetch";
+import { apiFetch } from "../utils/apiFetch";
 
 /** Must match FastAPI `MATCH_PROTOCOL_VERSION` in `backend/services/match_service.py`. */
-export const ONLINE_MATCH_PROTOCOL_EXPECTED = 2;
+export const ONLINE_MATCH_PROTOCOL_EXPECTED = 3;
 
 export type OnlineMatchHealthResult = {
   reachable: boolean;
@@ -14,7 +14,7 @@ export async function fetchOnlineMatchHealth(): Promise<OnlineMatchHealthResult>
   try {
     const res = await apiFetch(apiUrl("/health"));
     if (!res.ok) return { reachable: false, protocol: null };
-    const j = await readApiJson<{ online_match_protocol?: unknown }>(res);
+    const j = (await res.json()) as { online_match_protocol?: unknown };
     const protocol = typeof j.online_match_protocol === "number" ? j.online_match_protocol : null;
     return { reachable: true, protocol };
   } catch {

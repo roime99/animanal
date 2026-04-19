@@ -10,6 +10,8 @@ import { EndlessScreen } from "./screens/EndlessScreen";
 import { EndlessResultsScreen } from "./screens/EndlessResultsScreen";
 import { HomeScreen } from "./screens/HomeScreen";
 import { InventoryScreen } from "./screens/InventoryScreen";
+import { ProfileScreen } from "./screens/ProfileScreen";
+import { UsernameGateScreen } from "./screens/UsernameGateScreen";
 import { MgmtScreen } from "./screens/MgmtScreen";
 import { OnlineMatchScreen } from "./screens/OnlineMatchScreen";
 import {
@@ -25,12 +27,15 @@ import {
   type PlayerStats,
   type PlayerStatsNormalized,
 } from "./services/playerStorage";
-import { getSoundMuted, setSoundMuted } from "./services/settingsStorage";
+import { getEmbedMode, getSoundMuted, setEmbedMode, setSoundMuted } from "./services/settingsStorage";
 import { applyAppFont } from "./utils/applyAppFont";
 import { debugLog } from "./utils/debugLog";
 
 type Route =
+  | { screen: "loading" }
+  | { screen: "username_gate" }
   | { screen: "home" }
+  | { screen: "profile" }
   | { screen: "online_match" }
   | { screen: "hierarchy_group" }
   | { screen: "endless"; hierarchyMode?: string }
@@ -50,25 +55,29 @@ export default function App() {
     [APP_FONT_FAMILY]: require("./assets/fonts/junegull-rg.otf"),
   });
 
-  const [route, setRoute] = useState<Route>({ screen: "home" });
+  const [route, setRoute] = useState<Route>({ screen: "loading" });
   const [username, setUsername] = useState("");
   const [player, setPlayer] = useState<{ norm: string; stats: PlayerStats } | null>(null);
   const [endlessSessionId, setEndlessSessionId] = useState(0);
   const [soundMuted, setSoundMutedState] = useState(false);
-  /** Wikimedia embed edition — always on for GitHub Pages. */
-  const embedMode = true;
+  const [embedMode, setEmbedModeState] = useState(false);
   const returnRouteRef = useRef<Route>({ screen: "home" });
 
   useEffect(() => {
     let cancelled = false;
     (async () => {
       const norm = await getLastUsernameNorm();
-      if (!norm || cancelled) return;
-      const p = await getPlayer(norm);
-      if (p && !cancelled) {
-        setUsername(p.displayName);
-        setPlayer({ norm, stats: p });
+      if (cancelled) return;
+      if (norm) {
+        const p = await getPlayer(norm);
+        if (p && !cancelled) {
+          setUsername(p.displayName);
+          setPlayer({ norm, stats: p });
+          setRoute({ screen: "home" });
+          return;
+        }
       }
+      if (!cancelled) setRoute({ screen: "username_gate" });
     })();
     return () => {
       cancelled = true;
@@ -80,6 +89,17 @@ export default function App() {
     (async () => {
       const m = await getSoundMuted();
       if (!cancelled) setSoundMutedState(m);
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const em = await getEmbedMode();
+      if (!cancelled) setEmbedModeState(em);
     })();
     return () => {
       cancelled = true;
@@ -98,26 +118,38 @@ export default function App() {
     await setSoundMuted(next);
   }, [soundMuted]);
 
+  const handleUsernameGateSubmit = useCallback(async (name: string) => {
+    const r = await loginOrCreate(name);
+    if (!r.ok) {
+      throw new Error(r.error);
+    }
+    setPlayer({ norm: r.norm, stats: r.stats });
+    setUsername(r.stats.displayName);
+    setRoute({ screen: "home" });
+  }, []);
+
   const handleStart = useCallback(async () => {
-    const r = await loginOrCreate(username);
+    if (!player) return;
+    const r = await loginOrCreate(player.stats.displayName);
     if (!r.ok) {
       throw new Error(r.error);
     }
     setPlayer({ norm: r.norm, stats: r.stats });
     setEndlessSessionId((x) => x + 1);
     setRoute({ screen: "endless" });
-  }, [username]);
+  }, [player]);
 
   const goHierarchyGroup = useCallback(() => setRoute({ screen: "hierarchy_group" }), []);
 
   const goMgmt = useCallback(() => setRoute({ screen: "mgmt" }), []);
 
-  const usernameNorm = username.trim().toLowerCase();
+  const usernameNorm = (player?.stats.displayName ?? username).trim().toLowerCase();
   const isRoiBoiSession = player?.norm === ROI_BOI_NORM || usernameNorm === ROI_BOI_NORM;
 
   const handleHierarchyModePicked = useCallback(
     async (modeId: string) => {
-      const r = await loginOrCreate(username);
+      if (!player) return;
+      const r = await loginOrCreate(player.stats.displayName);
       if (!r.ok) {
         throw new Error(r.error);
       }
@@ -126,14 +158,17 @@ export default function App() {
       debugLog("App", "navigate to endless with hierarchy mode (on route)", { modeId });
       setRoute({ screen: "endless", hierarchyMode: modeId });
     },
-    [username]
+    [player]
   );
 
   const handleSwitchUser = useCallback(async () => {
     await clearLastUsername();
     setUsername("");
     setPlayer(null);
+    setRoute({ screen: "username_gate" });
   }, []);
+
+  const goProfile = useCallback(() => setRoute({ screen: "profile" }), []);
 
   const onFinishEndless = useCallback(
     async (score: number, wrongThisRun: number, context?: { hierarchyMode?: string }) => {
@@ -193,7 +228,7 @@ export default function App() {
     });
   }, []);
 
-  if (!fontsLoaded) {
+  if (!fontsLoaded || route.screen === "loading") {
     return (
       <View style={styles.fontsLoading}>
         <ActivityIndicator size="large" color="#2e7d32" />
@@ -206,22 +241,36 @@ export default function App() {
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar style="dark" />
-      {route.screen === "home" && (
+      {route.screen === "username_gate" && (
+        <UsernameGateScreen onSubmit={handleUsernameGateSubmit} />
+      )}
+      {route.screen === "home" && player && (
         <HomeScreen
-          username={username}
-          onUsernameChange={setUsername}
-          statsPreview={player?.stats ?? null}
           onStart={handleStart}
-          onSwitchUser={handleSwitchUser}
           soundMuted={soundMuted}
           onToggleSoundMute={toggleSoundMute}
-          embedMode={embedMode}
-          onToggleEmbedMode={() => {}}
-          onOpenCase={player ? navigateToCase : undefined}
-          onOpenInventory={player ? navigateToInventory : undefined}
+          displayName={player.stats.displayName}
+          goldenCoins={player.stats.goldenCoins ?? 0}
+          onOpenProfile={goProfile}
           onOnline1v1={goOnlineMatch}
           onHierarchyEndless={goHierarchyGroup}
           onOpenDevConsole={isRoiBoiSession ? goMgmt : undefined}
+        />
+      )}
+      {route.screen === "profile" && player && (
+        <ProfileScreen
+          displayName={player.stats.displayName}
+          stats={player.stats}
+          onOpenInventory={() => {
+            returnRouteRef.current = { screen: "profile" };
+            setRoute({ screen: "inventory" });
+          }}
+          onOpenCase={() => {
+            returnRouteRef.current = { screen: "profile" };
+            setRoute({ screen: "case" });
+          }}
+          onSwitchUser={handleSwitchUser}
+          onBack={goHome}
         />
       )}
       {route.screen === "mgmt" && isRoiBoiSession && (

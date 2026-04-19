@@ -1,11 +1,8 @@
 {
   "expo": {
-    "name": "Animal - Animal Trivia",
-    "slug": "animal-animal-trivia-embed",
+    "name": "Whos That Animal",
+    "slug": "whos-that-animal",
     "version": "1.0.0",
-    "experiments": {
-      "baseUrl": "/animanal/"
-    },
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
@@ -35,6 +32,8 @@
     "web": {
       "favicon": "./assets/favicon.png"
     },
-    "plugins": ["expo-font"]
+    "plugins": [
+      "expo-font"
+    ]
   }
 }

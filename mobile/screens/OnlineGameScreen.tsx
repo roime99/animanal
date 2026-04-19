@@ -27,8 +27,6 @@ type Props = {
   pointsToWin: number;
   imageRevealed: boolean;
   myWrongThisRound: boolean;
-  /** When true, loading hint refers to the bot instead of a second human. */
-  opponentIsBot?: boolean;
   onImageReady: () => void;
   onGuess: (choice: string) => void;
   onBack: () => void;
@@ -121,7 +119,6 @@ export function OnlineGameScreen({
   pointsToWin,
   imageRevealed,
   myWrongThisRound,
-  opponentIsBot,
   onImageReady,
   onGuess,
   onBack,
@@ -244,9 +241,7 @@ export function OnlineGameScreen({
               You {myPoints}/{pointsToWin}
             </Text>
             <Text style={styles.topBarMid}>Lv {endlessLevel}</Text>
-            <Text style={styles.topBarTextMuted}>
-              {opponentIsBot ? "Bot" : "Them"} {oppPoints}/{pointsToWin}
-            </Text>
+            <Text style={styles.topBarTextMuted}>Them {oppPoints}/{pointsToWin}</Text>
           </Animated.View>
 
           <Text style={styles.oppBar}>First correct wins the round · {poolLabel} pool</Text>
@@ -257,11 +252,7 @@ export function OnlineGameScreen({
                 <ActivityIndicator size="large" color="#fff" />
               </Animated.View>
               <Text style={styles.hiddenHint}>Loading the picture…</Text>
-              <Text style={styles.hiddenSub}>
-                {opponentIsBot
-                  ? "The image appears when you and the bot have it loaded (the bot simulates a short delay)."
-                  : "The image appears when both players have it fully loaded."}
-              </Text>
+              <Text style={styles.hiddenSub}>The image appears when both players have it fully loaded.</Text>
               {Platform.OS === "web" ? (
                 <img src={imageUri} alt="" style={{ width: 1, height: 1, opacity: 0, position: "absolute" }} />
               ) : (
@@ -336,9 +327,7 @@ export function OnlineGameScreen({
           </View>
 
           {myWrongThisRound ? (
-            <Text style={styles.lockedHint}>
-              You missed this round — wait for {opponentIsBot ? "the bot" : "your opponent"}.
-            </Text>
+            <Text style={styles.lockedHint}>You missed this round — wait for your opponent.</Text>
           ) : null}
 
           <Pressable accessibilityRole="button" accessibilityLabel="Leave match" style={styles.leaveBtn} onPress={onBack}>

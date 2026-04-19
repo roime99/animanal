@@ -1,4 +1,13 @@
-import { createElement, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import {
+  createElement,
+  useCallback,
+  useEffect,
+  useLayoutEffect,
+  useMemo,
+  useRef,
+  useState,
+  type ReactNode,
+} from "react";
 import type { CSSProperties } from "react";
 import {
   ActivityIndicator,
@@ -122,6 +131,14 @@ function normalizeAnimalName(name: string): string {
   return name.trim().toLowerCase();
 }
 
+/** Solo endless: speed bonus tiers (seconds after picture load). */
+function timeBonusGold(elapsedSec: number): number {
+  if (elapsedSec < 1.5) return 10;
+  if (elapsedSec < 3) return 5;
+  if (elapsedSec < 4.5) return 2;
+  return 0;
+}
+
 export function EndlessScreen({
   goldenCoins,
   soundMuted,
@@ -134,6 +151,8 @@ export function EndlessScreen({
   const wrongCountRef = useRef(0);
   /** Ref = source of truth so streak never resets due to stale closure between answers. */
   const winStreakRef = useRef(0);
+  /** When the picture finished loading (speed bonus measured from here). */
+  const pictureLoadedAtRef = useRef<number | null>(null);
   const seenAnimalNamesRef = useRef<Set<string>>(new Set());
   const loadPulse = useRef(new Animated.Value(0.5)).current;
   const imgOpacity = useRef(new Animated.Value(1)).current;
@@ -162,6 +181,7 @@ export function EndlessScreen({
 
   const [awaitingContinue, setAwaitingContinue] = useState(false);
   const [pendingProgress, setPendingProgress] = useState<PendingProgress>(null);
+  const [displayStreak, setDisplayStreak] = useState(0);
 
   const q = questions[index];
   const totalInBatch = questions.length;
@@ -180,6 +200,20 @@ export function EndlessScreen({
       groupLabel: groupLabel || null,
     });
   }, [hierarchyMode, groupLabel]);
+
+  const armSpeedBonusTimer = useCallback(() => {
+    pictureLoadedAtRef.current = Date.now();
+  }, []);
+
+  useLayoutEffect(() => {
+    pictureLoadedAtRef.current = null;
+  }, [questionKey]);
+
+  useEffect(() => {
+    if (Platform.OS !== "web" || !embedMode || !q?.image_embed_html || loading) return;
+    const t = setTimeout(() => armSpeedBonusTimer(), 300);
+    return () => clearTimeout(t);
+  }, [questionKey, embedMode, q?.image_embed_html, loading, armSpeedBonusTimer]);
 
   useEffect(() => {
     if (!loading) return;
@@ -280,11 +314,7 @@ export function EndlessScreen({
   }, [level, loadBatch]);
 
   const showCoinRewardPopup = useCallback(
-    (totalEarned: number, streakBonus: number) => {
-      const lines =
-        streakBonus > 0
-          ? [`+${totalEarned} 🪙`, `+${streakBonus} streak bonus!`]
-          : [`+${totalEarned} 🪙`];
+    (lines: string[]) => {
       setPopLines(lines);
       requestAnimationFrame(() => {
         popOpacity.setValue(0);
@@ -351,15 +381,28 @@ export function EndlessScreen({
       if (willBeWrong) {
         wrongCountRef.current += 1;
         winStreakRef.current = 0;
+        setDisplayStreak(0);
       } else {
-        const ordinal = score + 1;
+        const questionNumber = score + 1;
         const newStreak = winStreakRef.current + 1;
         winStreakRef.current = newStreak;
-        /* +2 bonus on every correct once you've reached 3+ in a row; keeps until a wrong answer. */
-        const streakBonus = newStreak >= 3 ? 2 : 0;
-        const earned = ordinal + streakBonus;
+        setDisplayStreak(newStreak);
+        const streakCount = newStreak;
+        const loadedAt = pictureLoadedAtRef.current;
+        const elapsedSec = loadedAt != null ? Math.max(0, (Date.now() - loadedAt) / 1000) : 999;
+        const timeBonus = loadedAt != null ? timeBonusGold(elapsedSec) : 0;
+        const earned = questionNumber + streakCount + timeBonus;
         void playCoinSound({ muted: soundMuted });
-        showCoinRewardPopup(earned, streakBonus);
+        const lines = [
+          `+${earned} 🪙 total`,
+          `${questionNumber} + ${streakCount} 🔥 + ${timeBonus} ⚡`,
+        ];
+        if (timeBonus > 0) {
+          if (timeBonus >= 10) lines.push("⚡ Lightning +10 🪙");
+          else if (timeBonus >= 5) lines.push("⚡ Quick +5 🪙");
+          else lines.push("⚡ Spark +2 🪙");
+        }
+        showCoinRewardPopup(lines);
         void onEarnCoins(earned);
       }
       const nextLives = willBeWrong ? lives - 1 : lives;
@@ -474,8 +517,16 @@ export function EndlessScreen({
                 </Text>
               ))}
             </View>
-            <Text style={styles.topBarText}>Level {level}</Text>
-            <Text style={styles.topBarTextMuted}>Score {score}</Text>
+            <View style={styles.topBarCenter}>
+              <Text style={styles.topBarText}>Level {level}</Text>
+              <Text style={styles.topBarTextMuted}>Score {score}</Text>
+            </View>
+            <View style={styles.topBarStreak} accessibilityLabel={`Win streak ${displayStreak}`}>
+              <Text style={styles.streakEmoji} allowFontScaling={false}>
+                🔥
+              </Text>
+              <Text style={styles.streakCount}>{displayStreak}</Text>
+            </View>
           </Animated.View>
           {groupLabel ? (
             <Text style={styles.groupBanner} numberOfLines={2}>
@@ -483,9 +534,7 @@ export function EndlessScreen({
             </Text>
           ) : null}
           <View style={styles.coinRow}>
-            <Text style={styles.coinPurse}>
-              🪙 {goldenCoins}
-            </Text>
+            <Text style={styles.coinPurse}>🪙 {goldenCoins}</Text>
           </View>
 
           {Platform.OS === "web" ? (
@@ -500,15 +549,21 @@ export function EndlessScreen({
               >
                 {embedMode && q.image_embed_html ? (
                   createElement("div", {
+                    key: questionKey,
                     style: { width: "100%", maxHeight: 300, overflow: "hidden" },
                     dangerouslySetInnerHTML: { __html: q.image_embed_html },
                   })
                 ) : (
                   <img
+                    key={questionKey}
                     src={imageUri}
                     alt=""
                     style={imageWebStyle}
-                    onError={() => setImageError(imageUri || "unknown")}
+                    onLoad={armSpeedBonusTimer}
+                    onError={() => {
+                      setImageError(imageUri || "unknown");
+                      armSpeedBonusTimer();
+                    }}
                   />
                 )}
               </Animated.View>
@@ -525,10 +580,15 @@ export function EndlessScreen({
                 }}
               >
                 <Image
+                  key={questionKey}
                   source={{ uri: imageUri }}
                   style={styles.image}
                   resizeMode="contain"
-                  onError={() => setImageError(imageUri || "unknown")}
+                  onLoad={armSpeedBonusTimer}
+                  onError={() => {
+                    setImageError(imageUri || "unknown");
+                    armSpeedBonusTimer();
+                  }}
                 />
               </Animated.View>
               {imageError ? <Text style={styles.imageError}>Image failed to load: {imageError}</Text> : null}
@@ -609,8 +669,27 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    gap: 8,
   },
-  hearts: { flexDirection: "row", gap: 6 },
+  topBarCenter: { flex: 1, alignItems: "center", justifyContent: "center" },
+  topBarStreak: {
+    width: 72,
+    alignItems: "flex-end",
+    justifyContent: "center",
+    flexDirection: "row",
+    gap: 2,
+  },
+  streakEmoji: { fontSize: 16 },
+  streakCount: {
+    fontSize: 16,
+    fontWeight: "900",
+    color: "#ffab40",
+    textShadowColor: "rgba(0,0,0,0.55)",
+    textShadowRadius: 4,
+    minWidth: 20,
+    textAlign: "right",
+  },
+  hearts: { flexDirection: "row", gap: 6, minWidth: 72 },
   heart: { fontSize: 18 },
   heartFull: { color: "#e53935", textShadowColor: "#000", textShadowRadius: 1 },
   heartEmpty: { color: "#cfd8dc" },

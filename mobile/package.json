@@ -3,13 +3,11 @@
   "version": "1.0.0",
   "main": "index.ts",
   "scripts": {
-    "vendor:assets": "node scripts/vendor-embed-assets.cjs",
-    "prestart": "npm run vendor:assets",
+    "sync:bg": "node scripts/sync-bg.cjs",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
-    "web": "expo start --web",
-    "export:web": "npm run vendor:assets && expo export --platform web"
+    "web": "expo start --web"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "^2.2.0",

@@ -1,6 +1,5 @@
 /**
- * Registered in `useFonts` / default `fontFamily`.
- * OTF is vendored into `assets/fonts/junegull-rg.otf` by `npm run vendor:assets`
- * (from repo-root `fonts/`, e.g. `junegull rg.otf`).
+ * Name passed to `useFonts` / `fontFamily`. File: `assets/fonts/junegull-rg.otf` (from `fonts/junegull rg.otf`).
+ * June Gull is a single face — avoid `fontWeight` on Android or the OS may ignore this family.
  */
 export const APP_FONT_FAMILY = "JuneGull";

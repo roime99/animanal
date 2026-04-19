@@ -2,30 +2,24 @@ import { useState } from "react";
 import {
   ActivityIndicator,
   ImageBackground,
+  Pressable,
   StyleSheet,
   Text,
-  TextInput,
   View,
 } from "react-native";
 
 import { STATIC_MENU_BG } from "../constants/menuBackgroundAsset";
+import { APP_FONT_FAMILY } from "../constants/typography";
 import { FadeSlideIn } from "../components/FadeSlideIn";
 import { ScalePress } from "../components/ScalePress";
-import type { PlayerStats } from "../services/playerStorage";
 
 type Props = {
-  username: string;
-  onUsernameChange: (value: string) => void;
-  statsPreview: PlayerStats | null;
   onStart: () => Promise<void>;
-  onSwitchUser: () => void;
   soundMuted: boolean;
   onToggleSoundMute: () => void;
-  /** Wikimedia-only images (no local images folder); HTML embed on web. */
-  embedMode: boolean;
-  onToggleEmbedMode: () => void;
-  onOpenCase?: () => void;
-  onOpenInventory?: () => void;
+  displayName: string;
+  goldenCoins: number;
+  onOpenProfile: () => void;
   onOnline1v1?: () => void;
   /** Birds, Mammals, Fish, etc. — endless filtered by hierarchy substring. */
   onHierarchyEndless?: () => void;
@@ -34,17 +28,12 @@ type Props = {
 };
 
 export function HomeScreen({
-  username,
-  onUsernameChange,
-  statsPreview,
   onStart,
-  onSwitchUser,
   soundMuted,
   onToggleSoundMute,
-  embedMode,
-  onToggleEmbedMode,
-  onOpenCase,
-  onOpenInventory,
+  displayName,
+  goldenCoins,
+  onOpenProfile,
   onOnline1v1,
   onHierarchyEndless,
   onOpenDevConsole,
@@ -64,13 +53,6 @@ export function HomeScreen({
     }
   };
 
-  const baseOnline = statsPreview ? 300 : 200;
-  const baseFamily = statsPreview ? 360 : 250;
-  const baseMute = statsPreview ? 410 : 270;
-  const baseEmbed = statsPreview ? 465 : 325;
-  const baseStart = statsPreview ? 530 : 390;
-  const baseSwitch = statsPreview ? 590 : 450;
-
   return (
     <ImageBackground
       source={STATIC_MENU_BG}
@@ -79,169 +61,108 @@ export function HomeScreen({
       imageStyle={styles.bgImage}
     >
       <View style={styles.overlay}>
-        <FadeSlideIn delay={0} duration={560} fromY={28}>
-          <Text style={styles.title}>Who's That Animal?</Text>
-        </FadeSlideIn>
-        <FadeSlideIn delay={80} duration={520} fromY={18}>
-          <Text style={styles.subtitle}>Enter a username to play. Names are unique (case-insensitive).</Text>
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={140} duration={480} fromY={14}>
-          <Text style={styles.label}>Username</Text>
-        </FadeSlideIn>
-        <FadeSlideIn delay={170} duration={480} fromY={12}>
-          <TextInput
-            value={username}
-            onChangeText={onUsernameChange}
-            placeholder="Your name"
-            placeholderTextColor="#bdbdbd"
-            autoCapitalize="none"
-            autoCorrect={false}
-            maxLength={32}
-            editable={!busy}
-            style={styles.input}
-          />
-        </FadeSlideIn>
-
-        {error ? (
-          <FadeSlideIn key={error} delay={0} duration={360} fromY={8}>
-            <Text style={styles.error}>{error}</Text>
-          </FadeSlideIn>
-        ) : null}
-
-        {statsPreview ? (
-          <FadeSlideIn key="stats" delay={220} duration={520} fromY={20} style={styles.preview}>
-            <Text style={styles.previewTitle}>Saved stats</Text>
-            <Text style={styles.previewLine}>🪙 Golden coins: {statsPreview.goldenCoins ?? 0}</Text>
-            <Text style={styles.previewLine}>Hi score: {statsPreview.endlessHiScore}</Text>
-            <Text style={styles.previewLine}>Games: {statsPreview.gamesPlayed}</Text>
-            <Text style={styles.previewLine}>
-              Correct / wrong: {statsPreview.totalCorrect} / {statsPreview.totalWrong}
+        <View style={styles.menuHeaderRow}>
+          <View style={styles.menuHeaderGutter} />
+          <View style={styles.menuHeaderCenter}>
+            <Text style={styles.brand} accessibilityRole="header">
+              ANIMANAL
             </Text>
-            {onOpenCase && onOpenInventory ? (
-              <FadeSlideIn delay={90} duration={420} fromY={14} style={styles.extraRow}>
-                <ScalePress
-                  accessibilityRole="button"
-                  accessibilityLabel="Open animal case"
-                  style={styles.smallBtn}
-                  onPress={onOpenCase}
-                >
-                  <Text style={styles.smallBtnText}>Animal case</Text>
-                </ScalePress>
-                <ScalePress
-                  accessibilityRole="button"
-                  accessibilityLabel="Inventory"
-                  style={styles.smallBtn}
-                  onPress={onOpenInventory}
-                >
-                  <Text style={styles.smallBtnText}>Inventory</Text>
-                </ScalePress>
-              </FadeSlideIn>
-            ) : null}
-          </FadeSlideIn>
-        ) : null}
+          </View>
+          <View style={[styles.menuHeaderGutter, styles.menuHeaderGutterRight]}>
+            <View style={styles.headerRightCluster}>
+              <Pressable
+                accessibilityRole="button"
+                accessibilityLabel="Open profile"
+                onPress={onOpenProfile}
+                style={({ pressed }) => [styles.profileChip, pressed && styles.profileChipPressed]}
+              >
+                <Text style={styles.profileName} numberOfLines={1}>
+                  {displayName}
+                </Text>
+                <Text style={styles.profileCoins}>🪙 {goldenCoins}</Text>
+              </Pressable>
+              <Pressable
+                accessibilityRole="switch"
+                accessibilityLabel={soundMuted ? "Unmute sound" : "Mute sound"}
+                accessibilityState={{ checked: soundMuted }}
+                onPress={onToggleSoundMute}
+                style={({ pressed }) => [styles.muteIconBtn, pressed && styles.muteIconBtnPressed]}
+              >
+                <Text style={styles.muteIconOnly} allowFontScaling={false}>
+                  {soundMuted ? "🔇" : "🔊"}
+                </Text>
+              </Pressable>
+            </View>
+          </View>
+        </View>
+        <View style={styles.content}>
+          {error ? (
+            <FadeSlideIn key={error} delay={0} duration={360} fromY={8}>
+              <Text style={styles.error}>{error}</Text>
+            </FadeSlideIn>
+          ) : null}
 
-        {onOnline1v1 ? (
-          <FadeSlideIn delay={baseOnline} duration={460} fromY={14}>
+          {onOnline1v1 ? (
+            <FadeSlideIn delay={0} duration={460} fromY={14}>
+              <ScalePress
+                accessibilityRole="button"
+                accessibilityLabel="Play online"
+                style={styles.onlineBtn}
+                scaleTo={0.97}
+                onPress={onOnline1v1}
+              >
+                <Text style={styles.onlineBtnText}>Play online</Text>
+              </ScalePress>
+            </FadeSlideIn>
+          ) : null}
+
+          {onHierarchyEndless ? (
+            <FadeSlideIn delay={80} duration={440} fromY={12}>
+              <ScalePress
+                accessibilityRole="button"
+                accessibilityLabel="Endless by animal group"
+                style={styles.groupBtn}
+                scaleTo={0.97}
+                onPress={onHierarchyEndless}
+                disabled={busy}
+              >
+                <Text style={styles.groupBtnText}>Endless by group</Text>
+              </ScalePress>
+            </FadeSlideIn>
+          ) : null}
+
+          {onOpenDevConsole ? (
+            <FadeSlideIn delay={140} duration={400} fromY={8}>
+              <ScalePress
+                accessibilityRole="button"
+                accessibilityLabel="Open developer console"
+                style={styles.devBtn}
+                scaleTo={0.98}
+                onPress={onOpenDevConsole}
+                disabled={busy}
+              >
+                <Text style={styles.devBtnText}>Dev console</Text>
+              </ScalePress>
+            </FadeSlideIn>
+          ) : null}
+
+          <FadeSlideIn delay={220} duration={480} fromY={16}>
             <ScalePress
               accessibilityRole="button"
-              accessibilityLabel="1v1 online"
-              style={styles.onlineBtn}
+              accessibilityLabel="Start game"
+              style={[styles.startBtn, busy && styles.disabled]}
               scaleTo={0.97}
-              onPress={onOnline1v1}
-            >
-              <Text style={styles.onlineBtnText}>1 v 1 online</Text>
-            </ScalePress>
-          </FadeSlideIn>
-        ) : null}
-
-        {onHierarchyEndless ? (
-          <FadeSlideIn delay={baseFamily} duration={440} fromY={12}>
-            <ScalePress
-              accessibilityRole="button"
-              accessibilityLabel="Endless by animal group"
-              style={styles.groupBtn}
-              scaleTo={0.97}
-              onPress={onHierarchyEndless}
+              onPress={handleStart}
               disabled={busy}
             >
-              <Text style={styles.groupBtnText}>Endless by group</Text>
+              {busy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.startText}>Endless (all animals)</Text>
+              )}
             </ScalePress>
           </FadeSlideIn>
-        ) : null}
-
-        {onOpenDevConsole ? (
-          <FadeSlideIn delay={baseFamily + 50} duration={400} fromY={8}>
-            <ScalePress
-              accessibilityRole="button"
-              accessibilityLabel="Open developer console"
-              style={styles.devBtn}
-              scaleTo={0.98}
-              onPress={onOpenDevConsole}
-              disabled={busy}
-            >
-              <Text style={styles.devBtnText}>Dev console</Text>
-            </ScalePress>
-          </FadeSlideIn>
-        ) : null}
-
-        <FadeSlideIn delay={baseMute} duration={440} fromY={12}>
-          <ScalePress
-            accessibilityRole="switch"
-            accessibilityLabel={soundMuted ? "Unmute sound" : "Mute sound"}
-            accessibilityState={{ checked: soundMuted }}
-            style={styles.muteBtn}
-            scaleTo={0.98}
-            onPress={onToggleSoundMute}
-          >
-            <Text style={styles.muteText}>{soundMuted ? "🔇 Sound off" : "🔊 Sound on"}</Text>
-          </ScalePress>
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={baseEmbed} duration={420} fromY={10}>
-          <ScalePress
-            accessibilityRole="switch"
-            accessibilityLabel={embedMode ? "Turn off embed mode" : "Turn on embed mode"}
-            accessibilityState={{ checked: embedMode }}
-            style={[styles.embedBtn, embedMode && styles.embedBtnOn]}
-            scaleTo={0.98}
-            onPress={onToggleEmbedMode}
-          >
-            <Text style={styles.embedBtnText}>
-              {embedMode ? "🖼 Embed mode on (Wikimedia)" : "🖼 Embed mode off (local images if any)"}
-            </Text>
-          </ScalePress>
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={baseStart} duration={480} fromY={16}>
-          <ScalePress
-            accessibilityRole="button"
-            accessibilityLabel="Start game"
-            style={[styles.startBtn, busy && styles.disabled]}
-            scaleTo={0.97}
-            onPress={handleStart}
-            disabled={busy}
-          >
-            {busy ? (
-              <ActivityIndicator color="#fff" />
-            ) : (
-              <Text style={styles.startText}>Endless (all animals)</Text>
-            )}
-          </ScalePress>
-        </FadeSlideIn>
-
-        <FadeSlideIn delay={baseSwitch} duration={440} fromY={10}>
-          <ScalePress
-            accessibilityRole="button"
-            accessibilityLabel="Switch user"
-            style={styles.switchBtn}
-            scaleTo={0.98}
-            onPress={onSwitchUser}
-            disabled={busy}
-          >
-            <Text style={styles.switchText}>Switch user</Text>
-          </ScalePress>
-        </FadeSlideIn>
+        </View>
       </View>
     </ImageBackground>
   );
@@ -252,82 +173,88 @@ const styles = StyleSheet.create({
   bgImage: { width: "100%", height: "100%" },
   overlay: {
     flex: 1,
+    backgroundColor: "rgba(20, 12, 8, 0.55)",
+  },
+  /** Top row: ANIMANAL centered, profile chip top-right of the main menu. */
+  menuHeaderRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    paddingHorizontal: 12,
+    paddingTop: 10,
+    paddingBottom: 4,
+  },
+  menuHeaderGutter: {
+    flex: 1,
+    minWidth: 0,
+  },
+  menuHeaderGutterRight: {
+    alignItems: "flex-end",
+  },
+  headerRightCluster: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: 8,
+  },
+  menuHeaderCenter: {
+    flexShrink: 1,
+    alignItems: "center",
+    paddingHorizontal: 4,
+  },
+  profileChip: {
+    maxWidth: 148,
+    minWidth: 88,
+    paddingVertical: 7,
+    paddingHorizontal: 10,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.38)",
+    borderWidth: 1,
+    borderColor: "rgba(255,224,130,0.5)",
+  },
+  profileChipPressed: { opacity: 0.9 },
+  profileName: {
+    fontFamily: APP_FONT_FAMILY,
+    fontSize: 13,
+    fontWeight: "800",
+    color: "#fff8e1",
+    textAlign: "right",
+    textShadowColor: "rgba(0,0,0,0.55)",
+    textShadowRadius: 4,
+  },
+  profileCoins: {
+    fontFamily: APP_FONT_FAMILY,
+    fontSize: 14,
+    fontWeight: "900",
+    color: "#ffe082",
+    textAlign: "right",
+    textShadowColor: "rgba(0,0,0,0.55)",
+    textShadowRadius: 6,
+  },
+  brand: {
+    fontFamily: APP_FONT_FAMILY,
+    textAlign: "center",
+    fontSize: 36,
+    letterSpacing: 3,
+    color: "#fff8e1",
+    textShadowColor: "rgba(0,0,0,0.9)",
+    textShadowOffset: { width: 0, height: 2 },
+    textShadowRadius: 12,
+  },
+  content: {
+    flex: 1,
     justifyContent: "center",
     alignItems: "center",
     padding: 24,
-    backgroundColor: "rgba(20, 12, 8, 0.55)",
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "800",
-    marginBottom: 12,
-    textAlign: "center",
-    color: "#fff8e1",
-    textShadowColor: "rgba(0,0,0,0.85)",
-    textShadowRadius: 10,
-  },
-  subtitle: {
-    fontSize: 15,
-    textAlign: "center",
-    marginBottom: 24,
-    color: "rgba(255,248,225,0.92)",
-    maxWidth: 320,
-    lineHeight: 22,
-    textShadowColor: "rgba(0,0,0,0.75)",
-    textShadowRadius: 6,
-  },
-  label: {
-    alignSelf: "flex-start",
-    width: "100%",
-    maxWidth: 360,
-    fontSize: 14,
-    fontWeight: "700",
-    color: "#ffecb3",
-    marginBottom: 6,
-  },
-  input: {
-    width: "100%",
-    maxWidth: 360,
-    borderWidth: 2,
-    borderColor: "#ffb300",
-    borderRadius: 12,
-    paddingVertical: 14,
-    paddingHorizontal: 16,
-    fontSize: 17,
-    backgroundColor: "rgba(255,255,255,0.95)",
-    color: "#1b1b1b",
-    marginBottom: 12,
+    paddingTop: 12,
   },
   error: {
+    fontFamily: APP_FONT_FAMILY,
     color: "#ffab91",
     fontSize: 14,
-    marginBottom: 12,
+    marginBottom: 16,
     textAlign: "center",
     maxWidth: 360,
-    fontWeight: "600",
   },
-  preview: {
-    width: "100%",
-    maxWidth: 360,
-    backgroundColor: "rgba(0,0,0,0.45)",
-    borderRadius: 12,
-    padding: 14,
-    marginBottom: 20,
-    borderWidth: 1,
-    borderColor: "rgba(255,193,7,0.5)",
-  },
-  previewTitle: { fontWeight: "800", color: "#ffe082", marginBottom: 8 },
-  previewLine: { fontSize: 14, color: "rgba(255,248,225,0.95)", marginBottom: 4 },
-  extraRow: { flexDirection: "row", flexWrap: "wrap", gap: 10, marginTop: 12, justifyContent: "center" },
-  smallBtn: {
-    backgroundColor: "rgba(106,27,154,0.85)",
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    borderWidth: 1,
-    borderColor: "rgba(255,213,79,0.55)",
-  },
-  smallBtnText: { color: "#ffe082", fontWeight: "800", fontSize: 14 },
   onlineBtn: {
     marginBottom: 14,
     paddingVertical: 12,
@@ -337,7 +264,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "rgba(100,181,246,0.65)",
   },
-  onlineBtnText: { color: "#e3f2fd", fontSize: 16, fontWeight: "800" },
+  onlineBtnText: { fontFamily: APP_FONT_FAMILY, color: "#e3f2fd", fontSize: 16 },
   groupBtn: {
     marginBottom: 12,
     paddingVertical: 12,
@@ -347,7 +274,7 @@ const styles = StyleSheet.create({
     borderWidth: 2,
     borderColor: "rgba(165,214,167,0.65)",
   },
-  groupBtnText: { color: "#e8f5e9", fontSize: 16, fontWeight: "800" },
+  groupBtnText: { fontFamily: APP_FONT_FAMILY, color: "#e8f5e9", fontSize: 16 },
   devBtn: {
     marginBottom: 10,
     paddingVertical: 8,
@@ -357,33 +284,25 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: "rgba(144, 164, 174, 0.45)",
   },
-  devBtnText: { color: "#cfd8dc", fontSize: 14, fontWeight: "700" },
-  muteBtn: {
-    marginBottom: 14,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-    borderRadius: 10,
+  devBtnText: { fontFamily: APP_FONT_FAMILY, color: "#cfd8dc", fontSize: 14 },
+  muteIconBtn: {
+    paddingVertical: 8,
+    paddingHorizontal: 10,
+    borderRadius: 12,
     backgroundColor: "rgba(0,0,0,0.35)",
     borderWidth: 1,
-    borderColor: "rgba(255,255,255,0.25)",
+    borderColor: "rgba(255,255,255,0.28)",
+    justifyContent: "center",
+    alignItems: "center",
+    minWidth: 44,
+    minHeight: 44,
   },
-  muteText: { color: "rgba(255,248,225,0.95)", fontSize: 15, fontWeight: "700" },
-  embedBtn: {
-    marginBottom: 12,
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-    borderRadius: 10,
-    backgroundColor: "rgba(0, 77, 64, 0.45)",
-    borderWidth: 1,
-    borderColor: "rgba(165, 214, 167, 0.35)",
-    maxWidth: 360,
-    alignSelf: "center",
+  muteIconBtnPressed: { opacity: 0.85 },
+  muteIconOnly: {
+    fontSize: 22,
+    lineHeight: 26,
+    textAlign: "center",
   },
-  embedBtnOn: {
-    backgroundColor: "rgba(0, 105, 92, 0.72)",
-    borderColor: "rgba(178, 255, 229, 0.55)",
-  },
-  embedBtnText: { color: "#e0f2f1", fontSize: 13, fontWeight: "700", textAlign: "center" },
   startBtn: {
     backgroundColor: "#ffb300",
     paddingVertical: 16,
@@ -394,12 +313,6 @@ const styles = StyleSheet.create({
     minWidth: 200,
     alignItems: "center",
   },
-  startText: { color: "#3e2723", fontSize: 20, fontWeight: "800" },
-  switchBtn: {
-    marginTop: 16,
-    paddingVertical: 12,
-    paddingHorizontal: 24,
-  },
-  switchText: { color: "rgba(255,248,225,0.9)", fontSize: 16, fontWeight: "600" },
+  startText: { fontFamily: APP_FONT_FAMILY, color: "#3e2723", fontSize: 20 },
   disabled: { opacity: 0.65 },
 });

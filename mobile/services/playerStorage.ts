@@ -1,9 +1,9 @@
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
-const PLAYERS_KEY = "animal_trivia_embed_players_v1";
-const LAST_USER_KEY = "animal_trivia_embed_last_user_v1";
+const PLAYERS_KEY = "whos_that_animal_players_v1";
+const LAST_USER_KEY = "whos_that_animal_last_user_v1";
 /** One-time grant flag (AsyncStorage). */
-const ROI_BOI_GRANT_KEY = "animal_trivia_embed_roi_boi_million_v1";
+const ROI_BOI_GRANT_KEY = "whos_that_animal_roi_boi_million_v1";
 /** Normalized username that receives the grant (`Roi_Boi` → `roi_boi`). */
 export const ROI_BOI_NORM = "roi_boi";
 const ROI_BOI_GOLDEN_COINS = 1_000_000;
@@ -11,9 +11,10 @@ const ROI_BOI_GOLDEN_COINS = 1_000_000;
 /** Cost in golden coins for the single available case type. */
 export const CASE_OPEN_COST = 100;
 
-/** Charged when an online 1v1 match starts (first round). Practice vs bot is free. */
-export const ONLINE_MATCH_ENTRY_COST = 50;
-export const ONLINE_MATCH_WIN_REWARD = 100;
+/** Default stake when creating a match (creator can change). */
+export const DEFAULT_ONLINE_MATCH_ENTRY_COST = 50;
+/** @deprecated Use DEFAULT_ONLINE_MATCH_ENTRY_COST; stake is set per match by the host. */
+export const ONLINE_MATCH_ENTRY_COST = DEFAULT_ONLINE_MATCH_ENTRY_COST;
 
 export type InventoryEntry = {
   id: number;
@@ -235,19 +236,21 @@ export async function openCaseAndRecord(
   return next;
 }
 
-export async function chargeOnlineMatchEntry(norm: string): Promise<PlayerStatsNormalized> {
+/** Charged when an online match starts (first round). `amount` is the stake set by the match creator. */
+export async function chargeOnlineMatchEntry(norm: string, amount: number): Promise<PlayerStatsNormalized> {
+  const cost = Math.max(0, Math.floor(amount));
   const map = await loadMap();
   const existing = map[norm];
   if (!existing) {
     throw new Error("Unknown player");
   }
   const base = withDefaults(existing);
-  if (base.goldenCoins < ONLINE_MATCH_ENTRY_COST) {
-    throw new Error(`Need ${ONLINE_MATCH_ENTRY_COST} golden coins to play online 1v1.`);
+  if (base.goldenCoins < cost) {
+    throw new Error(`Need ${cost} golden coins for this match.`);
   }
   const next: PlayerStatsNormalized = {
     ...base,
-    goldenCoins: base.goldenCoins - ONLINE_MATCH_ENTRY_COST,
+    goldenCoins: base.goldenCoins - cost,
     lastPlayedAt: new Date().toISOString(),
   };
   map[norm] = next;
@@ -255,8 +258,14 @@ export async function chargeOnlineMatchEntry(norm: string): Promise<PlayerStatsN
   return next;
 }
 
-/** Loser gets no refund (entry already spent). Winner receives ONLINE_MATCH_WIN_REWARD. */
-export async function applyOnlineMatchPayout(norm: string, won: boolean): Promise<PlayerStatsNormalized> {
+/** Loser gets no refund. Winner receives 2× the stake (same ratio as the old 50 → 100). */
+export async function applyOnlineMatchPayout(
+  norm: string,
+  won: boolean,
+  entryCost: number
+): Promise<PlayerStatsNormalized> {
+  const stake = Math.max(0, Math.floor(entryCost));
+  const reward = stake * 2;
   if (!won) {
     const map = await loadMap();
     const existing = map[norm];
@@ -272,5 +281,5 @@ export async function applyOnlineMatchPayout(norm: string, won: boolean): Promis
     await saveMap(map);
     return next;
   }
-  return addGoldenCoins(norm, ONLINE_MATCH_WIN_REWARD);
+  return addGoldenCoins(norm, reward);
 }

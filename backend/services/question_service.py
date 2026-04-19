@@ -38,8 +38,7 @@ def resolve_question_image_url(
     """
     name = (png_file_name or "").strip()
     remote = _normalize_remote_image_url(image_url_1280)
-    force_remote = embed_mode or bool(getattr(settings, "embed_only", False))
-    if force_remote:
+    if embed_mode:
         return remote
     images_dir = settings.images_dir
     if images_dir.is_dir() and name:
@@ -422,8 +421,6 @@ def build_formatted_game_questions(
     embed_mode: bool = False,
 ) -> tuple[int, str, list[dict[str, Any]]]:
     """Same card content as `GET /api/game/start` — used by HTTP handler and 1v1 matchmaking."""
-    if getattr(settings, "embed_only", False):
-        embed_mode = True
     lv = parse_level(difficulty, level)
     raw = build_game_questions(
         db_path,
