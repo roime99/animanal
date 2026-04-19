@@ -1,5 +1,8 @@
 {
   "expo": {
+    "experiments": {
+      "baseUrl": "/animanal"
+    },
     "name": "Whos That Animal",
     "slug": "whos-that-animal",
     "version": "1.0.0",
