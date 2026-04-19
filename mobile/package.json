@@ -4,11 +4,12 @@
   "main": "index.ts",
   "scripts": {
     "sync:bg": "node scripts/sync-bg.cjs",
+    "sync:fonts": "node scripts/sync-fonts.cjs",
     "start": "expo start",
     "android": "expo start --android",
     "ios": "expo start --ios",
     "web": "expo start --web",
-    "preexport:web": "npm run sync:bg",
+    "preexport:web": "npm run sync:bg && npm run sync:fonts",
     "export:web": "expo export -p web --output-dir dist"
   },
   "dependencies": {
