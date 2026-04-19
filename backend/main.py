@@ -1,11 +1,13 @@
 from __future__ import annotations
 
 import logging
+import os
 from contextlib import asynccontextmanager
 from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query, WebSocket
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.staticfiles import StaticFiles
 from pydantic import BaseModel, Field
@@ -62,6 +64,24 @@ async def _lifespan(_app: FastAPI):
 app = FastAPI(title="Who's That Animal — Game API", version="0.1.0", lifespan=_lifespan)
 
 _MAIN_FILE = Path(__file__).resolve()
+
+# Public web app (Expo static export on GitHub Pages). Render users who open the API URL see a link here.
+DEFAULT_GAME_WEB_URL = "https://roime99.github.io/animanal/"
+
+
+@app.get("/", response_class=HTMLResponse, include_in_schema=False)
+def root() -> str:
+    game_url = (os.environ.get("GAME_WEB_URL") or DEFAULT_GAME_WEB_URL).rstrip("/") + "/"
+    return f"""<!DOCTYPE html>
+<html lang="en"><head><meta charset="utf-8"/><meta name="viewport" content="width=device-width,initial-scale=1"/>
+<title>Game API</title></head>
+<body style="font-family:system-ui,sans-serif;max-width:28rem;margin:2rem auto;padding:0 1rem;line-height:1.5;color:#111">
+<h1 style="font-size:1.25rem">Who&apos;s That Animal — API</h1>
+<p>This host runs the <strong>FastAPI backend</strong> only. It is not the game screen.</p>
+<p><a href="{game_url}" style="font-weight:700">Open the web game</a></p>
+<p style="font-size:0.9rem;color:#444">Build the web app with <code>EXPO_PUBLIC_API_URL</code> set to this server&apos;s origin (no trailing slash), then deploy static files (e.g. GitHub Actions → Pages). See repo README.</p>
+<p style="font-size:0.85rem"><a href="/health">/health</a> · <a href="/api/mgmt/public-info">/api/mgmt/public-info</a></p>
+</body></html>"""
 
 
 @app.get("/AK-MGMT-PROBE", include_in_schema=False)

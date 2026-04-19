@@ -10,3 +10,6 @@ services:
     envVars:
       - key: PYTHON_VERSION
         value: "3.12.8"
+      # Optional: where the static web app is hosted (shown on GET /). Default matches GitHub Pages.
+      - key: GAME_WEB_URL
+        value: "https://roime99.github.io/animanal/"

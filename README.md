@@ -1,5 +1,17 @@
 # animanal
 
+## Where is the game?
+
+| What you opened | What you get |
+|-----------------|--------------|
+| **Your Render URL** (e.g. `https://animanal-api.onrender.com`) | **API only** — FastAPI. Opening `/` shows a small HTML page with a link to the **web game**. The React game is not hosted on Render. |
+| **`https://roime99.github.io/animanal/`** | **The actual web game** (static Expo build from GitHub Actions). |
+| **This repo’s README on github.com** | Documentation only — not the game. |
+
+If GitHub Pages shows the README instead of the game, open **Settings → Pages** and set **Source** to **GitHub Actions** (not “Deploy from a branch”). The workflow **`Deploy GitHub Pages`** must succeed — it runs `npm run export:web`, which needs the **`EXPO_PUBLIC_API_URL`** secret (your Render API URL, no trailing slash).
+
+---
+
 ## Animal - Animal Trivia (embed edition)
 
 Self-contained fork of the game that **only loads pictures from Wikimedia URLs** in your SQLite database. There is **no `images/` folder** and the API **never serves `/api/images/...`**.
