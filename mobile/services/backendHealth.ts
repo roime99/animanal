@@ -2,7 +2,7 @@ import { apiUrl } from "../constants/api";
 import { apiFetch } from "../utils/apiFetch";
 
 /** Must match FastAPI `MATCH_PROTOCOL_VERSION` in `backend/services/match_service.py`. */
-export const ONLINE_MATCH_PROTOCOL_EXPECTED = 3;
+export const ONLINE_MATCH_PROTOCOL_EXPECTED = 4;
 
 export type OnlineMatchHealthResult = {
   reachable: boolean;

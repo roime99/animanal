@@ -1,7 +1,8 @@
-import { useEffect, useRef } from "react";
+import { useEffect, useRef, useState } from "react";
 import { Animated, Easing, Image, StyleSheet, Text, View } from "react-native";
 
 import { FadeSlideIn } from "../components/FadeSlideIn";
+import { InventoryAnimalDetailModal } from "../components/InventoryAnimalDetailModal";
 import { ScalePress } from "../components/ScalePress";
 import type { InventoryEntry } from "../services/playerStorage";
 import { fullImageUrl } from "../services/gameApi";
@@ -75,6 +76,7 @@ function AnimatedCard({
 }
 
 export function InventoryScreen({ inventory, onBack }: Props) {
+  const [detailItem, setDetailItem] = useState<InventoryEntry | null>(null);
   const sorted = [...inventory].sort((a, b) => {
     const ra = raritySortRank(a.rarity);
     const rb = raritySortRank(b.rarity);
@@ -109,13 +111,15 @@ export function InventoryScreen({ inventory, onBack }: Props) {
               const uri = fullImageUrl(item.imageUrl);
               const border = rarityBorderColor(item.rarity);
               return (
-                <AnimatedCard
+                <ScalePress
                   key={`${item.id}-${item.unboxedAt}-${idx}`}
-                  item={item}
-                  index={idx}
-                  uri={uri}
-                  border={border}
-                />
+                  accessibilityRole="button"
+                  accessibilityLabel={`View details for ${item.animalName}`}
+                  scaleTo={0.97}
+                  onPress={() => setDetailItem(item)}
+                >
+                  <AnimatedCard item={item} index={idx} uri={uri} border={border} />
+                </ScalePress>
               );
             })}
           </View>
@@ -127,6 +131,12 @@ export function InventoryScreen({ inventory, onBack }: Props) {
           <Text style={styles.backText}>Back</Text>
         </ScalePress>
       </FadeSlideIn>
+
+      <InventoryAnimalDetailModal
+        visible={detailItem !== null}
+        item={detailItem}
+        onClose={() => setDetailItem(null)}
+      />
     </View>
   );
 }

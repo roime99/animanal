@@ -258,14 +258,16 @@ export async function chargeOnlineMatchEntry(norm: string, amount: number): Prom
   return next;
 }
 
-/** Loser gets no refund. Winner receives 2× the stake (same ratio as the old 50 → 100). */
+/** Loser gets no refund. Winner receives the full pot (each player paid `entryCost`; pot = entryCost × playerCount). */
 export async function applyOnlineMatchPayout(
   norm: string,
   won: boolean,
-  entryCost: number
+  entryCost: number,
+  playerCount: number = 2
 ): Promise<PlayerStatsNormalized> {
   const stake = Math.max(0, Math.floor(entryCost));
-  const reward = stake * 2;
+  const n = Math.max(2, Math.min(6, Math.floor(playerCount)));
+  const reward = stake * n;
   if (!won) {
     const map = await loadMap();
     const existing = map[norm];

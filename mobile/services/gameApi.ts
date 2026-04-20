@@ -125,6 +125,30 @@ export type CasePoolResponse = {
   animals: CasePoolAnimal[];
 };
 
+/** Full card data from `GET /api/animals/{id}` (inventory detail). */
+export type AnimalDetail = {
+  id: number;
+  animal_name: string;
+  animal_family: string;
+  fun_fact: string;
+  image_url: string;
+  image_embed_html?: string | null;
+};
+
+export async function fetchAnimalDetail(animalId: number): Promise<AnimalDetail> {
+  const res = await apiFetch(apiUrl(`/api/animals/${animalId}`));
+  const data = (await res.json()) as AnimalDetail & { detail?: unknown };
+  if (!res.ok) {
+    const detail =
+      typeof data.detail === "string" ? data.detail : JSON.stringify(data.detail ?? res.statusText);
+    throw new Error(detail || `HTTP ${res.status}`);
+  }
+  if (typeof data.id !== "number" || typeof data.animal_name !== "string") {
+    throw new Error("Invalid response from server");
+  }
+  return data;
+}
+
 /** Same tier bands as FastAPI `_rarity_for_difficulty` (case pool + fallback). */
 function rarityForDifficulty(d: number): string {
   if (d <= 2) return "common";

@@ -6,6 +6,9 @@ venv/
 .env
 backend/.env
 
+# Runtime SQLite (created on server from init_social_db)
+backend/data/social.sqlite
+
 # Node / Expo
 mobile/node_modules/
 mobile/.expo/

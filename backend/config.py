@@ -11,6 +11,7 @@ class Settings(BaseSettings):
 
     db_path: Path = _REPO_ROOT / "animals.db"
     images_dir: Path = _REPO_ROOT / "images"
+    social_db_path: Path = _REPO_ROOT / "backend" / "data" / "social.sqlite"
 
 
 settings = Settings()

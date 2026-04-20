@@ -3,6 +3,7 @@ import { StatusBar } from "expo-status-bar";
 import { useCallback, useEffect, useRef, useState } from "react";
 import { ActivityIndicator, SafeAreaView, StyleSheet, View } from "react-native";
 
+import { FriendInviteBanner } from "./components/FriendInviteBanner";
 import { APP_FONT_FAMILY } from "./constants/typography";
 import { CaseOpenScreen } from "./screens/CaseOpenScreen";
 import { HierarchyGroupScreen } from "./screens/HierarchyGroupScreen";
@@ -10,6 +11,7 @@ import { EndlessScreen } from "./screens/EndlessScreen";
 import { EndlessResultsScreen } from "./screens/EndlessResultsScreen";
 import { HomeScreen } from "./screens/HomeScreen";
 import { InventoryScreen } from "./screens/InventoryScreen";
+import { FriendProfileScreen } from "./screens/FriendProfileScreen";
 import { ProfileScreen } from "./screens/ProfileScreen";
 import { UsernameGateScreen } from "./screens/UsernameGateScreen";
 import { MgmtScreen } from "./screens/MgmtScreen";
@@ -27,6 +29,7 @@ import {
   type PlayerStats,
   type PlayerStatsNormalized,
 } from "./services/playerStorage";
+import { postHeartbeat } from "./services/socialApi";
 import { getEmbedMode, getSoundMuted, setEmbedMode, setSoundMuted } from "./services/settingsStorage";
 import { applyAppFont } from "./utils/applyAppFont";
 import { debugLog } from "./utils/debugLog";
@@ -36,6 +39,7 @@ type Route =
   | { screen: "username_gate" }
   | { screen: "home" }
   | { screen: "profile" }
+  | { screen: "friend_profile"; friendNorm: string }
   | { screen: "online_match" }
   | { screen: "hierarchy_group" }
   | { screen: "endless"; hierarchyMode?: string }
@@ -62,6 +66,12 @@ export default function App() {
   const [soundMuted, setSoundMutedState] = useState(false);
   const [embedMode, setEmbedModeState] = useState(false);
   const returnRouteRef = useRef<Route>({ screen: "home" });
+  const [pendingInviteJoin, setPendingInviteJoin] = useState<{
+    code: string;
+    entry_cost: number;
+    key: number;
+  } | null>(null);
+  const inviteKeyRef = useRef(0);
 
   useEffect(() => {
     let cancelled = false;
@@ -105,6 +115,28 @@ export default function App() {
       cancelled = true;
     };
   }, []);
+
+  /** Sync profile + presence for friends / public profiles */
+  useEffect(() => {
+    if (!player) return;
+    let cancelled = false;
+    const tick = async () => {
+      try {
+        const p = await getPlayer(player.norm);
+        if (!cancelled && p) {
+          await postHeartbeat(player.norm, p.displayName, p);
+        }
+      } catch {
+        /* offline API ok */
+      }
+    };
+    void tick();
+    const id = setInterval(tick, 25_000);
+    return () => {
+      cancelled = true;
+      clearInterval(id);
+    };
+  }, [player]);
 
   const goHome = useCallback(() => {
     setRoute({ screen: "home" });
@@ -169,6 +201,11 @@ export default function App() {
   }, []);
 
   const goProfile = useCallback(() => setRoute({ screen: "profile" }), []);
+
+  const openFriendProfile = useCallback((friendNorm: string) => {
+    returnRouteRef.current = { screen: "profile" };
+    setRoute({ screen: "friend_profile", friendNorm });
+  }, []);
 
   const onFinishEndless = useCallback(
     async (score: number, wrongThisRun: number, context?: { hierarchyMode?: string }) => {
@@ -241,6 +278,16 @@ export default function App() {
   return (
     <SafeAreaView style={styles.root}>
       <StatusBar style="dark" />
+      {player && route.screen !== "username_gate" ? (
+        <FriendInviteBanner
+          meNorm={player.norm}
+          onInviteAccepted={({ code, entry_cost }) => {
+            inviteKeyRef.current += 1;
+            setPendingInviteJoin({ code, entry_cost, key: inviteKeyRef.current });
+            setRoute({ screen: "online_match" });
+          }}
+        />
+      ) : null}
       {route.screen === "username_gate" && (
         <UsernameGateScreen onSubmit={handleUsernameGateSubmit} />
       )}
@@ -259,6 +306,7 @@ export default function App() {
       )}
       {route.screen === "profile" && player && (
         <ProfileScreen
+          playerNorm={player.norm}
           displayName={player.stats.displayName}
           stats={player.stats}
           onOpenInventory={() => {
@@ -271,7 +319,11 @@ export default function App() {
           }}
           onSwitchUser={handleSwitchUser}
           onBack={goHome}
+          onOpenFriendProfile={openFriendProfile}
         />
+      )}
+      {route.screen === "friend_profile" && (
+        <FriendProfileScreen friendNorm={route.friendNorm} onBack={() => setRoute(returnRouteRef.current)} />
       )}
       {route.screen === "mgmt" && isRoiBoiSession && (
         <MgmtScreen devUserNorm={player?.norm ?? ROI_BOI_NORM} onBack={goHome} />
@@ -284,10 +336,13 @@ export default function App() {
           onBack={goHome}
           soundMuted={soundMuted}
           playerNorm={player?.norm ?? null}
+          playerDisplayName={player?.stats.displayName ?? username}
           goldenCoins={player?.stats.goldenCoins ?? 0}
           onPlayerEconomyUpdate={(stats: PlayerStatsNormalized) => {
             setPlayer((prev) => (prev ? { norm: prev.norm, stats } : prev));
           }}
+          autoJoinInvite={pendingInviteJoin}
+          onConsumedAutoJoinInvite={() => setPendingInviteJoin(null)}
         />
       )}
       {route.screen === "endless" && player && (

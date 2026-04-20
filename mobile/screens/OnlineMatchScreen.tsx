@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
@@ -28,6 +28,12 @@ import {
   type MatchRole,
   type OpenMatchRow,
 } from "../services/matchApi";
+import {
+  fetchFriends,
+  requestFriend,
+  sendLobbyInvite,
+  type FriendRow,
+} from "../services/socialApi";
 import { playCoinSound } from "../services/playCoinSound";
 import {
   applyOnlineMatchPayout,
@@ -40,13 +46,25 @@ import { ScalePress } from "../components/ScalePress";
 
 type Phase = "menu" | "lobby" | "game" | "results";
 
+type LobbyGuestRow = { token: string; display_name: string; username_norm?: string | null };
+
 type LobbyMsg = {
   type: "lobby";
   code: string;
   guest_joined: boolean;
+  guest_count?: number;
+  max_players?: number;
   both_connected: boolean;
   can_start: boolean;
   entry_cost?: number;
+  lobby_title?: string;
+  host_username_norm?: string | null;
+  guest_username_norm?: string | null;
+  host_display_name?: string;
+  guest_display_name?: string;
+  guest_list?: LobbyGuestRow[];
+  /** Host + guests currently in the lobby (if server sends it). */
+  players_joined?: number;
 };
 
 type RoundStartMsg = {
@@ -55,8 +73,8 @@ type RoundStartMsg = {
   endless_level: number;
   pool_label: string;
   question: GameQuestion;
-  host_points: number;
-  guest_points: number;
+  scores: Record<string, number>;
+  player_labels: Record<string, string>;
   points_to_win: number;
   image_revealed: boolean;
 };
@@ -66,29 +84,31 @@ type ImageRevealMsg = { type: "image_reveal"; round_seq: number };
 type GuessResultMsg = {
   type: "guess_result";
   round_seq: number;
-  wrong_role: "host" | "guest";
-  host_points: number;
-  guest_points: number;
+  wrong_key: string;
+  scores: Record<string, number>;
+  player_labels: Record<string, string>;
 };
 
 type RoundResultMsg = {
   type: "round_result";
   round_seq: number;
-  reason: "first_correct" | "both_wrong";
-  winner: "host" | "guest" | null;
+  reason: "first_correct" | "all_wrong";
+  winner_key: string | null;
   correct_answer?: string;
-  host_points: number;
-  guest_points: number;
+  scores: Record<string, number>;
+  player_labels: Record<string, string>;
   points_to_win: number;
 };
 
 type MatchEndMsg = {
   type: "match_end";
-  host_points: number;
-  guest_points: number;
+  scores: Record<string, number>;
+  player_labels?: Record<string, string>;
+  winner_key: string | null;
   points_to_win: number;
-  host_result: string;
-  guest_result: string;
+  results_by_key: Record<string, string>;
+  player_count: number;
+  pot_total: number;
 };
 
 type ErrMsg = { type: "error"; message: string };
@@ -111,12 +131,30 @@ function isGameQuestion(x: unknown): x is GameQuestion {
   );
 }
 
+function buildScoreboardRows(
+  scores: Record<string, number>,
+  labels: Record<string, string>,
+  myKey: string
+): { label: string; points: number; isMe: boolean }[] {
+  const keys = new Set([...Object.keys(scores), ...Object.keys(labels)]);
+  return Array.from(keys).map((k) => ({
+    label: labels[k] ?? (k === "host" ? "Host" : "Player"),
+    points: scores[k] ?? 0,
+    isMe: k === myKey,
+  }));
+}
+
 type Props = {
   onBack: () => void;
   soundMuted: boolean;
   playerNorm: string | null;
+  /** Display name for match + social sync */
+  playerDisplayName: string;
   goldenCoins: number;
   onPlayerEconomyUpdate: (stats: PlayerStatsNormalized) => void;
+  /** When set (e.g. accepted invite banner), auto-join this room from menu */
+  autoJoinInvite?: { code: string; entry_cost: number; key: number } | null;
+  onConsumedAutoJoinInvite?: () => void;
 };
 
 function hintForMatchError(message: string): string {
@@ -134,8 +172,11 @@ export function OnlineMatchScreen({
   onBack,
   soundMuted,
   playerNorm,
+  playerDisplayName,
   goldenCoins,
   onPlayerEconomyUpdate,
+  autoJoinInvite,
+  onConsumedAutoJoinInvite,
 }: Props) {
   const [phase, setPhase] = useState<Phase>("menu");
   const [busy, setBusy] = useState(false);
@@ -151,28 +192,41 @@ export function OnlineMatchScreen({
   const [currentQ, setCurrentQ] = useState<GameQuestion | null>(null);
   const [endlessLevel, setEndlessLevel] = useState(1);
   const [poolLabel, setPoolLabel] = useState("");
-  const [hostPoints, setHostPoints] = useState(0);
-  const [guestPoints, setGuestPoints] = useState(0);
+  const [scoresByKey, setScoresByKey] = useState<Record<string, number>>({});
+  const [playerLabels, setPlayerLabels] = useState<Record<string, string>>({});
+  const [myScoreKey, setMyScoreKey] = useState<string>("host");
   const [pointsToWin, setPointsToWin] = useState(10);
   const [imageRevealed, setImageRevealed] = useState(false);
   const [myWrong, setMyWrong] = useState(false);
 
   const [myResult, setMyResult] = useState<string>("");
-  const [myPointsFinal, setMyPointsFinal] = useState(0);
-  const [theirPointsFinal, setTheirPointsFinal] = useState(0);
+  const [finalScores, setFinalScores] = useState<Record<string, number>>({});
+  const [finalLabels, setFinalLabels] = useState<Record<string, string>>({});
+  const [potTotal, setPotTotal] = useState(0);
+  const [matchPlayerCount, setMatchPlayerCount] = useState(2);
 
   const wsRef = useRef<WebSocket | null>(null);
   const roleRef = useRef<MatchRole>("host");
+  const myScoreKeyRef = useRef<string>("host");
   const imageReadySentRef = useRef(-1);
   const entryFeeChargedRef = useRef(false);
   const matchEntryCostRef = useRef(DEFAULT_ONLINE_MATCH_ENTRY_COST);
 
-  const [openBattles, setOpenBattles] = useState<OpenMatchRow[]>([]);
+  const [publicLobbies, setPublicLobbies] = useState<OpenMatchRow[]>([]);
   const [createEntryCostStr, setCreateEntryCostStr] = useState(String(DEFAULT_ONLINE_MATCH_ENTRY_COST));
+  const [createMaxPlayers, setCreateMaxPlayers] = useState(2);
   const [createPassword, setCreatePassword] = useState("");
   const [joinPassword, setJoinPassword] = useState("");
   const [passwordModalRow, setPasswordModalRow] = useState<OpenMatchRow | null>(null);
   const [modalPassword, setModalPassword] = useState("");
+
+  const [opponentNorm, setOpponentNorm] = useState<string | null>(null);
+  const [opponentDisplayName, setOpponentDisplayName] = useState("");
+  const [alreadyFriends, setAlreadyFriends] = useState(false);
+  const [friendsForInvite, setFriendsForInvite] = useState<FriendRow[]>([]);
+  const [inviteBusyNorm, setInviteBusyNorm] = useState<string | null>(null);
+  const autoJoinHandledKeyRef = useRef<number | null>(null);
+  const opponentNormRef = useRef<string | null>(null);
 
   const tearDownWs = useCallback(() => {
     const w = wsRef.current;
@@ -211,9 +265,9 @@ export function OnlineMatchScreen({
     const tick = async () => {
       try {
         const list = await fetchMatchOpenList();
-        if (!cancelled) setOpenBattles(list);
+        if (!cancelled) setPublicLobbies(list);
       } catch {
-        if (!cancelled) setOpenBattles([]);
+        if (!cancelled) setPublicLobbies([]);
       }
     };
     tick();
@@ -224,6 +278,25 @@ export function OnlineMatchScreen({
     };
   }, [phase]);
 
+  useEffect(() => {
+    if (phase !== "lobby" || role !== "host" || !playerNorm || !lobby?.code) {
+      setFriendsForInvite([]);
+      return;
+    }
+    let cancelled = false;
+    (async () => {
+      try {
+        const fr = await fetchFriends(playerNorm);
+        if (!cancelled) setFriendsForInvite(fr);
+      } catch {
+        if (!cancelled) setFriendsForInvite([]);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [phase, role, playerNorm, lobby?.code]);
+
   const handleMessage = useCallback(
     (raw: unknown) => {
       if (!raw || typeof raw !== "object") return;
@@ -233,6 +306,32 @@ export function OnlineMatchScreen({
         setLobby(lm);
         if (typeof lm.entry_cost === "number" && lm.entry_cost > 0) {
           matchEntryCostRef.current = lm.entry_cost;
+        }
+        const me = roleRef.current;
+        const hNorm = lm.host_username_norm ? String(lm.host_username_norm) : null;
+        const hName = (lm.host_display_name || "").trim();
+        const list = lm.guest_list ?? [];
+        if (me === "host") {
+          const firstGuest = list[0];
+          const gNorm = firstGuest?.username_norm ? String(firstGuest.username_norm) : null;
+          const gName = (firstGuest?.display_name || "").trim();
+          if (gNorm) {
+            opponentNormRef.current = gNorm;
+            setOpponentNorm(gNorm);
+            setOpponentDisplayName(gName || gNorm);
+          } else {
+            opponentNormRef.current = null;
+            setOpponentNorm(null);
+            setOpponentDisplayName("");
+          }
+        } else if (me === "guest" && hNorm) {
+          opponentNormRef.current = hNorm;
+          setOpponentNorm(hNorm);
+          setOpponentDisplayName(hName || hNorm);
+        } else {
+          opponentNormRef.current = null;
+          setOpponentNorm(null);
+          setOpponentDisplayName("");
         }
         return;
       }
@@ -248,8 +347,8 @@ export function OnlineMatchScreen({
           setCurrentQ(r.question);
           setEndlessLevel(r.endless_level);
           setPoolLabel(r.pool_label);
-          setHostPoints(r.host_points);
-          setGuestPoints(r.guest_points);
+          setScoresByKey(r.scores && typeof r.scores === "object" ? { ...r.scores } : {});
+          setPlayerLabels(r.player_labels && typeof r.player_labels === "object" ? { ...r.player_labels } : {});
           setPointsToWin(r.points_to_win ?? 10);
           setImageRevealed(!!r.image_revealed);
           setMyWrong(false);
@@ -292,43 +391,53 @@ export function OnlineMatchScreen({
       }
       if (msg.type === "guess_result") {
         const r = msg as GuessResultMsg;
-        setHostPoints(r.host_points);
-        setGuestPoints(r.guest_points);
-        const me: MatchRole = roleRef.current;
-        if (r.wrong_role === me) {
+        setScoresByKey(r.scores && typeof r.scores === "object" ? { ...r.scores } : {});
+        setPlayerLabels(r.player_labels && typeof r.player_labels === "object" ? { ...r.player_labels } : {});
+        if (r.wrong_key === myScoreKeyRef.current) {
           setMyWrong(true);
         }
         return;
       }
       if (msg.type === "round_result") {
         const r = msg as RoundResultMsg;
-        setHostPoints(r.host_points);
-        setGuestPoints(r.guest_points);
+        setScoresByKey(r.scores && typeof r.scores === "object" ? { ...r.scores } : {});
+        setPlayerLabels(r.player_labels && typeof r.player_labels === "object" ? { ...r.player_labels } : {});
         setPointsToWin(r.points_to_win ?? 10);
-        const me = roleRef.current;
-        if (r.reason === "first_correct" && r.winner === me) {
+        if (r.reason === "first_correct" && r.winner_key === myScoreKeyRef.current) {
           void playCoinSound({ muted: soundMuted });
         }
         return;
       }
       if (msg.type === "match_end") {
         const m = msg as MatchEndMsg;
-        const me = roleRef.current;
-        const mine = me === "host" ? m.host_points : m.guest_points;
-        const theirs = me === "host" ? m.guest_points : m.host_points;
-        const res = me === "host" ? m.host_result : m.guest_result;
+        const myKey = myScoreKeyRef.current;
+        const res = m.results_by_key?.[myKey] ?? "tie";
+        const scores = m.scores && typeof m.scores === "object" ? { ...m.scores } : {};
         const norm = playerNorm;
+        const nPlayers = typeof m.player_count === "number" ? m.player_count : 2;
         if (norm) {
           if (res === "win") {
             void playCoinSound({ muted: soundMuted });
           }
-          void applyOnlineMatchPayout(norm, res === "win", matchEntryCostRef.current)
+          void applyOnlineMatchPayout(norm, res === "win", matchEntryCostRef.current, nPlayers)
             .then(onPlayerEconomyUpdate)
             .catch(() => {});
         }
+        const oppN = opponentNormRef.current;
+        if (norm && oppN && nPlayers === 2) {
+          void fetchFriends(norm).then((list) => {
+            setAlreadyFriends(list.some((x) => x.norm === oppN));
+          });
+        } else {
+          setAlreadyFriends(false);
+        }
         setPointsToWin(m.points_to_win ?? 10);
-        setMyPointsFinal(mine);
-        setTheirPointsFinal(theirs);
+        setFinalScores(scores);
+        setFinalLabels(
+          m.player_labels && typeof m.player_labels === "object" ? { ...m.player_labels } : {}
+        );
+        setPotTotal(typeof m.pot_total === "number" ? m.pot_total : matchEntryCostRef.current * nPlayers);
+        setMatchPlayerCount(nPlayers);
         setMyResult(res);
         setPhase("results");
         tearDownWs();
@@ -348,6 +457,11 @@ export function OnlineMatchScreen({
       tearDownWs();
       entryFeeChargedRef.current = false;
       matchEntryCostRef.current = entryCost;
+      const key = r === "host" ? "host" : t;
+      myScoreKeyRef.current = key;
+      setMyScoreKey(key);
+      setScoresByKey({});
+      setPlayerLabels({});
       const url = wsUrl(`/api/match/ws/${encodeURIComponent(c)}?token=${encodeURIComponent(t)}`);
       const ws = new WebSocket(url);
       wsRef.current = ws;
@@ -370,6 +484,58 @@ export function OnlineMatchScreen({
     [handleMessage, tearDownWs]
   );
 
+  /** Accept invite from banner → auto-join this lobby */
+  useEffect(() => {
+    if (!autoJoinInvite || !playerNorm || phase !== "menu") return;
+    if (autoJoinHandledKeyRef.current === autoJoinInvite.key) return;
+    autoJoinHandledKeyRef.current = autoJoinInvite.key;
+    let cancelled = false;
+    (async () => {
+      setBusy(true);
+      try {
+        const info = await fetchMatchLookup(autoJoinInvite.code);
+        if (cancelled) return;
+        if (goldenCoins < info.entry_cost) {
+          Alert.alert(
+            "Match",
+            `This match costs ${info.entry_cost} golden coins when it starts. You have ${goldenCoins}.`
+          );
+          onConsumedAutoJoinInvite?.();
+          return;
+        }
+        if (info.has_password) {
+          Alert.alert("Match", "This invite needs a password — enter it under Join with code.");
+          onConsumedAutoJoinInvite?.();
+          return;
+        }
+        const res = await fetchMatchJoin(autoJoinInvite.code, null, {
+          guest_username_norm: playerNorm,
+          guest_display_name: playerDisplayName,
+        });
+        if (cancelled) return;
+        openSocket(res.code, res.token, "guest", res.entry_cost);
+        setMode("join");
+        onConsumedAutoJoinInvite?.();
+      } catch (e) {
+        Alert.alert("Match", e instanceof Error ? e.message : String(e));
+        onConsumedAutoJoinInvite?.();
+      } finally {
+        if (!cancelled) setBusy(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    autoJoinInvite,
+    goldenCoins,
+    onConsumedAutoJoinInvite,
+    openSocket,
+    phase,
+    playerDisplayName,
+    playerNorm,
+  ]);
+
   const onCreate = useCallback(async () => {
     if (!playerNorm) {
       Alert.alert("Match", "You need to be signed in to play online.");
@@ -378,11 +544,15 @@ export function OnlineMatchScreen({
     const parsed = parseInt(createEntryCostStr.trim(), 10);
     const entry_cost =
       Number.isFinite(parsed) && parsed >= 1 ? Math.min(100_000, parsed) : DEFAULT_ONLINE_MATCH_ENTRY_COST;
+    const mp = Math.max(2, Math.min(6, Math.floor(createMaxPlayers)));
     setBusy(true);
     try {
       const res = await fetchMatchCreate({
         entry_cost,
         password: createPassword.trim() || null,
+        host_username_norm: playerNorm,
+        host_display_name: playerDisplayName,
+        max_players: mp,
       });
       openSocket(res.code, res.token, "host", res.entry_cost);
       setMode("create");
@@ -391,7 +561,7 @@ export function OnlineMatchScreen({
     } finally {
       setBusy(false);
     }
-  }, [openSocket, playerNorm, createEntryCostStr, createPassword]);
+  }, [openSocket, playerNorm, playerDisplayName, createEntryCostStr, createPassword, createMaxPlayers]);
 
   const onJoin = useCallback(async () => {
     const raw = joinInput.trim();
@@ -417,7 +587,10 @@ export function OnlineMatchScreen({
         Alert.alert("Match", "This match is password-protected. Enter the password below.");
         return;
       }
-      const res = await fetchMatchJoin(raw, joinPassword.trim() || null);
+      const res = await fetchMatchJoin(raw, joinPassword.trim() || null, {
+        guest_username_norm: playerNorm,
+        guest_display_name: playerDisplayName,
+      });
       openSocket(res.code, res.token, "guest", res.entry_cost);
       setMode("join");
     } catch (e) {
@@ -425,7 +598,7 @@ export function OnlineMatchScreen({
     } finally {
       setBusy(false);
     }
-  }, [joinInput, joinPassword, openSocket, goldenCoins, playerNorm]);
+  }, [joinInput, joinPassword, openSocket, goldenCoins, playerNorm, playerDisplayName]);
 
   const joinBattleFromList = useCallback(
     async (row: OpenMatchRow, password: string | null) => {
@@ -442,7 +615,10 @@ export function OnlineMatchScreen({
       }
       setBusy(true);
       try {
-        const res = await fetchMatchJoin(row.code, password);
+        const res = await fetchMatchJoin(row.code, password, {
+          guest_username_norm: playerNorm,
+          guest_display_name: playerDisplayName,
+        });
         openSocket(res.code, res.token, "guest", res.entry_cost);
         setMode("join");
         setPasswordModalRow(null);
@@ -453,7 +629,7 @@ export function OnlineMatchScreen({
         setBusy(false);
       }
     },
-    [goldenCoins, openSocket, playerNorm]
+    [goldenCoins, openSocket, playerNorm, playerDisplayName]
   );
 
   const startMatch = useCallback(() => {
@@ -505,22 +681,60 @@ export function OnlineMatchScreen({
     entryFeeChargedRef.current = false;
     matchEntryCostRef.current = DEFAULT_ONLINE_MATCH_ENTRY_COST;
     roleRef.current = "host";
+    myScoreKeyRef.current = "host";
+    setMyScoreKey("host");
     imageReadySentRef.current = -1;
+    opponentNormRef.current = null;
+    setOpponentNorm(null);
+    setOpponentDisplayName("");
+    setAlreadyFriends(false);
     setPhase("menu");
     setMode(null);
     setLobby(null);
     setCurrentQ(null);
     setMyResult("");
-    setMyPointsFinal(0);
-    setTheirPointsFinal(0);
+    setFinalScores({});
+    setFinalLabels({});
+    setPotTotal(0);
+    setMatchPlayerCount(2);
+    setScoresByKey({});
+    setPlayerLabels({});
     setImageRevealed(false);
     setMyWrong(false);
   }, [tearDownWs]);
 
-  const pts =
-    role === "host"
-      ? { mine: hostPoints, opp: guestPoints }
-      : { mine: guestPoints, opp: hostPoints };
+  const scoreboardRows = useMemo(
+    () => buildScoreboardRows(scoresByKey, playerLabels, myScoreKey),
+    [scoresByKey, playerLabels, myScoreKey]
+  );
+
+  const inviteFriendToLobby = useCallback(
+    async (friend: FriendRow) => {
+      if (!playerNorm || !lobby?.code) return;
+      setInviteBusyNorm(friend.norm);
+      try {
+        const cost = lobby.entry_cost ?? matchEntryCostRef.current;
+        await sendLobbyInvite(playerNorm, friend.norm, lobby.code, cost, playerDisplayName);
+        Alert.alert("Invite sent", `${friend.display_name || friend.norm} will see a popup at the top of the screen.`);
+      } catch (e) {
+        Alert.alert("Invite", e instanceof Error ? e.message : String(e));
+      } finally {
+        setInviteBusyNorm(null);
+      }
+    },
+    [lobby?.code, lobby?.entry_cost, playerDisplayName, playerNorm]
+  );
+
+  const addOpponentAfterMatch = useCallback(async () => {
+    if (!playerNorm || !opponentNorm) return;
+    try {
+      await requestFriend(playerNorm, opponentNorm);
+      Alert.alert("Friends", "Friend request sent.");
+      setAlreadyFriends(true);
+    } catch (e) {
+      Alert.alert("Friends", e instanceof Error ? e.message : String(e));
+    }
+  }, [opponentNorm, playerNorm]);
 
   if (phase === "game" && !currentQ) {
     return (
@@ -546,8 +760,7 @@ export function OnlineMatchScreen({
         roundSeq={roundSeq}
         endlessLevel={endlessLevel}
         poolLabel={poolLabel}
-        myPoints={pts.mine}
-        oppPoints={pts.opp}
+        scoreboardRows={scoreboardRows}
         pointsToWin={pointsToWin}
         imageRevealed={imageRevealed}
         myWrongThisRound={myWrong}
@@ -573,6 +786,16 @@ export function OnlineMatchScreen({
   if (phase === "results") {
     const headline =
       myResult === "win" ? "You win!" : myResult === "lose" ? "You lost" : "It's a tie!";
+    const oppLabel = opponentDisplayName || opponentNorm || "Opponent";
+    const showAddFriend =
+      !!playerNorm &&
+      !!opponentNorm &&
+      opponentNorm !== playerNorm &&
+      !alreadyFriends &&
+      matchPlayerCount === 2;
+    const standings = buildScoreboardRows(finalScores, finalLabels, myScoreKey).sort(
+      (a, b) => b.points - a.points
+    );
     return (
       <ImageBackground
         source={STATIC_MENU_BG}
@@ -582,9 +805,35 @@ export function OnlineMatchScreen({
       >
         <View style={styles.overlay}>
           <Text style={styles.title}>{headline}</Text>
-          <Text style={styles.resultLine}>
-            Final: you {myPointsFinal} — opponent {theirPointsFinal} (first to {pointsToWin})
+          <Text style={styles.resultOpp}>
+            Pot {potTotal} golden coins · winner takes all · first to {pointsToWin}
           </Text>
+          {standings.map((row, i) => (
+            <Text key={`${row.label}-${i}`} style={styles.resultStandRow}>
+              {row.label}
+              {row.isMe ? " (you)" : ""}: {row.points}
+            </Text>
+          ))}
+          {matchPlayerCount <= 2 ? <Text style={styles.resultOpp}>vs {oppLabel}</Text> : null}
+          {matchPlayerCount > 2 ? (
+            <Text style={styles.friendsNote}>
+              Multi-player pot match — add people from Profile if you like.
+            </Text>
+          ) : null}
+          {showAddFriend ? (
+            <ScalePress
+              accessibilityRole="button"
+              accessibilityLabel="Add opponent as friend"
+              style={styles.primaryBtn}
+              scaleTo={0.97}
+              onPress={() => void addOpponentAfterMatch()}
+            >
+              <Text style={styles.primaryBtnText}>Add {oppLabel} to friends</Text>
+            </ScalePress>
+          ) : null}
+          {!!opponentNorm && alreadyFriends ? (
+            <Text style={styles.friendsNote}>You are friends with {oppLabel}</Text>
+          ) : null}
           <ScalePress
             accessibilityRole="button"
             accessibilityLabel="Play again"
@@ -631,13 +880,18 @@ export function OnlineMatchScreen({
       );
     }
     const isHost = role === "host";
+    const maxPl = lobby.max_players ?? 2;
+    const joined =
+      typeof lobby.players_joined === "number"
+        ? lobby.players_joined
+        : 1 + (lobby.guest_count ?? 0);
     let hint = "";
     if (!lobby.guest_joined) {
-      hint = isHost ? "Waiting for your friend to enter this code on their phone…" : "Connecting…";
+      hint = isHost ? "Waiting for players — share the room code or invite friends." : "Connecting…";
     } else if (!lobby.both_connected) {
       hint = "Finishing connection…";
     } else if (isHost) {
-      hint = "Both connected — tap Start match.";
+      hint = joined >= 2 ? "Everyone connected — tap Start match when ready." : "Need at least one other player.";
     } else {
       hint = "Waiting for host to start…";
     }
@@ -651,13 +905,47 @@ export function OnlineMatchScreen({
         <ScrollView contentContainerStyle={styles.lobbyScroll}>
           <View style={styles.overlay}>
             <Text style={styles.title}>Play online</Text>
-            <Text style={styles.stakeLine}>
-              Stake 🪙 {lobby.entry_cost ?? DEFAULT_ONLINE_MATCH_ENTRY_COST} each · winner +🪙{" "}
-              {(lobby.entry_cost ?? DEFAULT_ONLINE_MATCH_ENTRY_COST) * 2}
+            <Text style={styles.lobbyHeading} numberOfLines={2}>
+              {lobby.lobby_title ?? "Lobby"}
             </Text>
-            <Text style={styles.codeLabel}>{isHost ? "Share this code" : "You're in"}</Text>
+            <Text style={styles.stakeLine}>
+              Stake 🪙 {lobby.entry_cost ?? DEFAULT_ONLINE_MATCH_ENTRY_COST} each · up to{" "}
+              {(lobby.entry_cost ?? DEFAULT_ONLINE_MATCH_ENTRY_COST) * maxPl} pot · {joined}/{maxPl} players · winner takes
+              all
+            </Text>
+            <Text style={styles.codeLabel}>{isHost ? "Room code" : "You're in"}</Text>
             <Text style={styles.codeBig}>{lobby.code}</Text>
+            <Text style={styles.oppName}>
+              In lobby: {(lobby.host_display_name || "Host").trim() || "Host"}
+              {lobby.guest_list && lobby.guest_list.length > 0
+                ? `, ${lobby.guest_list.map((g) => g.display_name || g.username_norm || "Player").join(", ")}`
+                : ""}
+            </Text>
             <Text style={styles.hint}>{hint}</Text>
+            {isHost && !lobby.guest_joined && friendsForInvite.length > 0 ? (
+              <View style={styles.inviteBlock}>
+                <Text style={styles.inviteTitle}>Invite a friend</Text>
+                <Text style={styles.inviteHint}>
+                  They see a popup at the top. They must be on your friends list. Up to {maxPl - 1} other players in this
+                  room.
+                </Text>
+                {friendsForInvite.map((f) => (
+                  <Pressable
+                    key={f.norm}
+                    accessibilityRole="button"
+                    style={({ pressed }) => [styles.inviteRow, pressed && styles.battleRowPressed]}
+                    onPress={() => void inviteFriendToLobby(f)}
+                    disabled={inviteBusyNorm !== null}
+                  >
+                    <View style={[styles.dot, { backgroundColor: f.online ? "#66bb6a" : "#9e9e9e" }]} />
+                    <Text style={styles.inviteRowText} numberOfLines={1}>
+                      {f.display_name || f.norm}
+                    </Text>
+                    <Text style={styles.inviteRowMeta}>{inviteBusyNorm === f.norm ? "…" : "Invite"}</Text>
+                  </Pressable>
+                ))}
+              </View>
+            ) : null}
             {isHost && lobby.can_start ? (
               <Pressable
                 accessibilityRole="button"
@@ -720,7 +1008,7 @@ export function OnlineMatchScreen({
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>Password</Text>
             <Text style={styles.modalSub}>
-              Match {passwordModalRow?.code} · 🪙 {passwordModalRow?.entry_cost}
+              {passwordModalRow?.lobby_title ?? "Lobby"} · 🪙 {passwordModalRow?.entry_cost} each
             </Text>
             <TextInput
               value={modalPassword}
@@ -786,18 +1074,18 @@ export function OnlineMatchScreen({
           ) : null}
           <Text style={styles.sub}>
             Same rules as solo endless (easy → medium → hard). First correct wins the round; first to 10 points wins the
-            duel. The host sets the stake (default {DEFAULT_ONLINE_MATCH_ENTRY_COST} each); winner earns 2× stake.
+            match. Each player pays the stake when the match starts; the winner takes the full pot.
           </Text>
 
-          <Text style={styles.sectionLabel}>Open battles</Text>
-          {openBattles.length === 0 ? (
-            <Text style={styles.emptyList}>No open battles — create one or join with a code.</Text>
+          <Text style={styles.sectionLabel}>Public lobbies</Text>
+          {publicLobbies.length === 0 ? (
+            <Text style={styles.emptyList}>No public lobbies — create one or join with a code.</Text>
           ) : (
-            openBattles.map((row) => (
+            publicLobbies.map((row) => (
               <Pressable
                 key={row.code}
                 accessibilityRole="button"
-                accessibilityLabel={`Join match ${row.code}`}
+                accessibilityLabel={`Join ${row.lobby_title}`}
                 style={({ pressed }) => [styles.battleRow, pressed && styles.battleRowPressed]}
                 onPress={() => {
                   if (row.has_password) {
@@ -810,17 +1098,19 @@ export function OnlineMatchScreen({
                 disabled={busy}
               >
                 <View style={styles.battleRowMain}>
-                  <Text style={styles.battleRowCode}>{row.code}</Text>
+                  <Text style={styles.battleRowTitle} numberOfLines={2}>
+                    {row.lobby_title || "Lobby"}
+                  </Text>
                   <Text style={styles.battleRowMeta}>
-                    🪙 {row.entry_cost} each · {row.has_password ? "🔒 locked" : "open"}
+                    🪙 {row.entry_cost} · {row.players_joined}/{row.max_players} · {row.has_password ? "🔒" : "open"}
                   </Text>
                 </View>
-                <Text style={styles.battleRowHint}>Tap to join</Text>
+                <Text style={styles.battleRowHint}>Code {row.code} · tap to join</Text>
               </Pressable>
             ))
           )}
 
-          <Text style={styles.sectionLabel}>Create battle</Text>
+          <Text style={styles.sectionLabel}>Create lobby</Text>
           <Text style={styles.fieldHint}>Stake (golden coins each player pays when the match starts)</Text>
           <TextInput
             value={createEntryCostStr}
@@ -831,6 +1121,28 @@ export function OnlineMatchScreen({
             editable={!busy}
             style={styles.smallInput}
           />
+          <Text style={styles.fieldHint}>Max players in this match (2–6, including you)</Text>
+          <View style={styles.maxPlayersRow}>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Decrease max players"
+              style={({ pressed }) => [styles.maxPlayersBtn, pressed && styles.battleRowPressed]}
+              onPress={() => setCreateMaxPlayers((n) => Math.max(2, n - 1))}
+              disabled={busy}
+            >
+              <Text style={styles.maxPlayersBtnText}>−</Text>
+            </Pressable>
+            <Text style={styles.maxPlayersValue}>{createMaxPlayers}</Text>
+            <Pressable
+              accessibilityRole="button"
+              accessibilityLabel="Increase max players"
+              style={({ pressed }) => [styles.maxPlayersBtn, pressed && styles.battleRowPressed]}
+              onPress={() => setCreateMaxPlayers((n) => Math.min(6, n + 1))}
+              disabled={busy}
+            >
+              <Text style={styles.maxPlayersBtnText}>+</Text>
+            </Pressable>
+          </View>
           <Text style={styles.fieldHint}>Password (optional — only players with the password can join)</Text>
           <TextInput
             value={createPassword}
@@ -845,7 +1157,7 @@ export function OnlineMatchScreen({
           />
           <ScalePress
             accessibilityRole="button"
-            accessibilityLabel="Create battle"
+            accessibilityLabel="Create lobby"
             style={[styles.primaryBtn, busy && styles.disabled]}
             scaleTo={0.97}
             onPress={onCreate}
@@ -854,7 +1166,7 @@ export function OnlineMatchScreen({
             {busy ? (
               <ActivityIndicator color="#3e2723" />
             ) : (
-              <Text style={styles.primaryBtnText}>Create battle</Text>
+              <Text style={styles.primaryBtnText}>Create lobby</Text>
             )}
           </ScalePress>
 
@@ -989,7 +1301,13 @@ const styles = StyleSheet.create({
     marginBottom: 8,
   },
   battleRowPressed: { opacity: 0.88 },
-  battleRowMain: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  battleRowMain: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: 8 },
+  battleRowTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#fff8e1",
+  },
   battleRowCode: {
     fontSize: 22,
     fontWeight: "900",
@@ -1012,6 +1330,15 @@ const styles = StyleSheet.create({
     color: "#1b1b1b",
     marginBottom: 12,
   },
+  lobbyHeading: {
+    fontSize: 22,
+    fontWeight: "900",
+    color: "#fff8e1",
+    textAlign: "center",
+    marginBottom: 8,
+    maxWidth: 360,
+    lineHeight: 28,
+  },
   stakeLine: {
     fontSize: 14,
     fontWeight: "700",
@@ -1021,6 +1348,27 @@ const styles = StyleSheet.create({
     maxWidth: 360,
     lineHeight: 20,
   },
+  maxPlayersRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 20,
+    marginBottom: 12,
+    width: "100%",
+    maxWidth: 360,
+  },
+  maxPlayersBtn: {
+    minWidth: 48,
+    paddingVertical: 10,
+    paddingHorizontal: 16,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,224,130,0.4)",
+    alignItems: "center",
+  },
+  maxPlayersBtnText: { fontSize: 22, fontWeight: "900", color: "#fff8e1" },
+  maxPlayersValue: { fontSize: 22, fontWeight: "900", color: "#ffe082", minWidth: 36, textAlign: "center" },
   lobbyScroll: {
     flexGrow: 1,
     justifyContent: "center",
@@ -1167,4 +1515,67 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: "rgba(255,248,225,0.95)",
   },
+  resultOpp: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#ffe082",
+    marginBottom: 8,
+    textAlign: "center",
+  },
+  resultStandRow: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: "#fff8e1",
+    marginBottom: 4,
+    textAlign: "center",
+  },
+  friendsNote: {
+    fontSize: 14,
+    color: "rgba(255,248,225,0.88)",
+    marginBottom: 14,
+    textAlign: "center",
+  },
+  oppName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#c8e6c9",
+    marginBottom: 10,
+    textAlign: "center",
+  },
+  inviteBlock: {
+    width: "100%",
+    maxWidth: 360,
+    marginBottom: 16,
+    padding: 12,
+    borderRadius: 12,
+    backgroundColor: "rgba(0,0,0,0.35)",
+    borderWidth: 1,
+    borderColor: "rgba(255,224,130,0.35)",
+  },
+  inviteTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#ffecb3",
+    marginBottom: 6,
+  },
+  inviteHint: {
+    fontSize: 12,
+    color: "rgba(255,248,225,0.8)",
+    marginBottom: 10,
+    lineHeight: 17,
+  },
+  inviteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: 10,
+    paddingHorizontal: 10,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.25)",
+    marginBottom: 8,
+    borderWidth: 1,
+    borderColor: "rgba(255,224,130,0.2)",
+  },
+  dot: { width: 10, height: 10, borderRadius: 5, marginRight: 10 },
+  inviteRowText: { flex: 1, fontSize: 15, fontWeight: "700", color: "#fff8e1" },
+  inviteRowMeta: { fontSize: 14, fontWeight: "800", color: "#ffb300" },
 });

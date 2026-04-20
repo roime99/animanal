@@ -17,13 +17,14 @@ import { GameCyclingBackdrop } from "../components/GameCyclingBackdrop";
 import { useGameCyclingBackground } from "../hooks/useGameCyclingBackground";
 import type { GameQuestion } from "../services/gameApi";
 import { fullImageUrl } from "../services/gameApi";
+type ScoreboardRow = { label: string; points: number; isMe: boolean };
+
 type Props = {
   question: GameQuestion;
   roundSeq: number;
   endlessLevel: number;
   poolLabel: string;
-  myPoints: number;
-  oppPoints: number;
+  scoreboardRows: ScoreboardRow[];
   pointsToWin: number;
   imageRevealed: boolean;
   myWrongThisRound: boolean;
@@ -114,8 +115,7 @@ export function OnlineGameScreen({
   roundSeq,
   endlessLevel,
   poolLabel,
-  myPoints,
-  oppPoints,
+  scoreboardRows,
   pointsToWin,
   imageRevealed,
   myWrongThisRound,
@@ -137,6 +137,15 @@ export function OnlineGameScreen({
   const questionKey = useMemo(() => `${roundSeq}-${question.id}`, [roundSeq, question.id]);
 
   const { cycleIndex, flash, flashCorrect, flashWrong } = useGameCyclingBackground(true);
+
+  const meRow = useMemo(() => scoreboardRows.find((r) => r.isMe), [scoreboardRows]);
+  const othersLine = useMemo(() => {
+    const rest = scoreboardRows
+      .filter((r) => !r.isMe)
+      .sort((a, b) => b.points - a.points)
+      .map((r) => `${r.label} ${r.points}`);
+    return rest.length ? rest.join(" · ") : "";
+  }, [scoreboardRows]);
 
   useEffect(() => {
     setPicked(null);
@@ -238,10 +247,12 @@ export function OnlineGameScreen({
             style={[styles.topBar, { opacity: topBarOpacity, transform: [{ translateY: topBarY }] }]}
           >
             <Text style={styles.topBarText}>
-              You {myPoints}/{pointsToWin}
+              {meRow ? `${meRow.label} ${meRow.points}/${pointsToWin}` : `— /${pointsToWin}`}
             </Text>
             <Text style={styles.topBarMid}>Lv {endlessLevel}</Text>
-            <Text style={styles.topBarTextMuted}>Them {oppPoints}/{pointsToWin}</Text>
+            <Text style={styles.topBarTextMuted} numberOfLines={2}>
+              {othersLine || "—"}
+            </Text>
           </Animated.View>
 
           <Text style={styles.oppBar}>First correct wins the round · {poolLabel} pool</Text>
@@ -252,7 +263,7 @@ export function OnlineGameScreen({
                 <ActivityIndicator size="large" color="#fff" />
               </Animated.View>
               <Text style={styles.hiddenHint}>Loading the picture…</Text>
-              <Text style={styles.hiddenSub}>The image appears when both players have it fully loaded.</Text>
+              <Text style={styles.hiddenSub}>The image appears when every player has it fully loaded.</Text>
               {Platform.OS === "web" ? (
                 <img src={imageUri} alt="" style={{ width: 1, height: 1, opacity: 0, position: "absolute" }} />
               ) : (
@@ -327,7 +338,7 @@ export function OnlineGameScreen({
           </View>
 
           {myWrongThisRound ? (
-            <Text style={styles.lockedHint}>You missed this round — wait for your opponent.</Text>
+            <Text style={styles.lockedHint}>You missed this round — wait for the others.</Text>
           ) : null}
 
           <Pressable accessibilityRole="button" accessibilityLabel="Leave match" style={styles.leaveBtn} onPress={onBack}>

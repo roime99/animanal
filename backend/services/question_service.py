@@ -128,6 +128,38 @@ def row_to_dict(row: sqlite3.Row) -> dict[str, Any]:
     }
 
 
+def fetch_animal_by_id(db_path: Path, animal_id: int) -> dict[str, Any] | None:
+    """Single row from `animals` by primary key, or None if missing."""
+    conn = sqlite3.connect(db_path, check_same_thread=False)
+    conn.row_factory = sqlite3.Row
+    cur = conn.cursor()
+    cur.execute(
+        """
+        SELECT
+            id,
+            animal_name,
+            scientific_name,
+            animal_family,
+            hierarchy,
+            source_page,
+            image_url_1280,
+            png_file_name,
+            comments,
+            wrong_answers,
+            difficulty,
+            fun_fact
+        FROM animals
+        WHERE id = ?
+        """,
+        (animal_id,),
+    )
+    row = cur.fetchone()
+    conn.close()
+    if row is None:
+        return None
+    return row_to_dict(row)
+
+
 def fetch_all_animals(db_path: Path) -> list[dict[str, Any]]:
     conn = sqlite3.connect(db_path, check_same_thread=False)
     conn.row_factory = sqlite3.Row
